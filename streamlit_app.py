@@ -1,6 +1,5 @@
 # ============================================
-# CRYPTO DASHBOARD - OPTIMIZED FOR DIRECTIONAL TRADING
-# Clear UP/DOWN signals with confidence scores
+# CRYPTO DASHBOARD - 5m & 15m PREDICTIONS
 # ============================================
 
 import streamlit as st
@@ -22,7 +21,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- Custom CSS for Better Styling ---
+# --- Custom CSS ---
 st.markdown("""
 <style>
     .main-header {
@@ -53,17 +52,17 @@ st.markdown("""
         font-size: 0.9rem;
     }
     .metric-card .coin-direction {
-        font-size: 1.2rem;
-        margin-top: 0.5rem;
-        padding: 0.2rem 0.5rem;
+        font-size: 1rem;
+        margin-top: 0.3rem;
+        padding: 0.15rem 0.4rem;
         border-radius: 0.3rem;
         display: inline-block;
         font-weight: 700;
     }
     .metric-card .coin-stats {
-        font-size: 0.7rem;
+        font-size: 0.65rem;
         color: #888;
-        margin-top: 0.3rem;
+        margin-top: 0.2rem;
     }
     .direction-up {
         background: #00b89433;
@@ -84,6 +83,13 @@ st.markdown("""
         color: white;
         font-weight: 600;
     }
+    .best-bet-medium {
+        background: linear-gradient(135deg, #fdcb6e 0%, #f39c12 100%);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        color: #1e1e2f;
+        font-weight: 600;
+    }
     .skip-bet {
         background: linear-gradient(135deg, #636e72 0%, #2d3436 100%);
         padding: 1rem;
@@ -95,47 +101,44 @@ st.markdown("""
         border-radius: 0.5rem;
         overflow: hidden;
     }
-    /* Direction badges for table */
     .badge-up {
         background: #00b89433;
         color: #00b894;
-        padding: 0.2rem 0.6rem;
+        padding: 0.15rem 0.5rem;
         border-radius: 0.3rem;
         font-weight: 700;
-        font-size: 0.9rem;
+        font-size: 0.8rem;
     }
     .badge-down {
         background: #ff6b6b33;
         color: #ff6b6b;
-        padding: 0.2rem 0.6rem;
+        padding: 0.15rem 0.5rem;
         border-radius: 0.3rem;
         font-weight: 700;
-        font-size: 0.9rem;
+        font-size: 0.8rem;
     }
     .badge-wait {
         background: #636e7233;
         color: #b2bec3;
-        padding: 0.2rem 0.6rem;
+        padding: 0.15rem 0.5rem;
         border-radius: 0.3rem;
         font-weight: 600;
-        font-size: 0.9rem;
+        font-size: 0.8rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
 st.markdown('<div class="main-header">📊 Crypto Predictor Pro</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Live Directional Signals • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ 5m & 15m Predictions • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
 BANKROLL = 100.00
 MAX_RISK_PER_TRADE = 0.02
 MIN_EDGE = 0.05
-PREDICT_WINDOW = 5
 
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
-# Coin metadata for display
 COIN_NAMES = {
     'BTC-USD': ('Bitcoin', '₿', '#f7931a'),
     'ETH-USD': ('Ethereum', '⟠', '#627eea'),
@@ -145,10 +148,9 @@ COIN_NAMES = {
     'DOGE-USD': ('Dogecoin', 'Ð', '#c2a633')
 }
 
-# --- Data Fetching Functions ---
+# --- Data Fetching ---
 @st.cache_data(ttl=60)
 def fetch_yahoo_data(symbol):
-    """Fetch OHLCV data from Yahoo Finance"""
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period='5d', interval='1m')
@@ -169,7 +171,6 @@ def fetch_yahoo_data(symbol):
 
 @st.cache_data(ttl=300)
 def fetch_coinpaprika_data(coin_id):
-    """Fetch data from CoinPaprika"""
     try:
         url = f"https://api.coinpaprika.com/v1/tickers/{coin_id}"
         response = requests.get(url, timeout=5)
@@ -177,19 +178,18 @@ def fetch_coinpaprika_data(coin_id):
         quotes = data.get('quotes', {}).get('USD', {})
         return {
             'price': quotes.get('price', 0),
+            'percent_change_5m': quotes.get('percent_change_5m', 0),
             'percent_change_15m': quotes.get('percent_change_15m', 0),
-            'percent_change_1h': quotes.get('percent_change_1h', 0),
             'percent_change_24h': quotes.get('percent_change_24h', 0),
             'volume_24h': quotes.get('volume_24h', 0),
             'market_cap': quotes.get('market_cap', 0)
         }
     except:
-        return {'price': 0, 'percent_change_15m': 0, 'percent_change_1h': 0, 
+        return {'price': 0, 'percent_change_5m': 0, 'percent_change_15m': 0, 
                 'percent_change_24h': 0, 'volume_24h': 0, 'market_cap': 0}
 
 @st.cache_data(ttl=3600)
 def fetch_fear_greed_index():
-    """Fetch the Fear & Greed Index"""
     try:
         url = "https://api.alternative.me/fng/?limit=2"
         response = requests.get(url, timeout=5)
@@ -205,48 +205,39 @@ def fetch_fear_greed_index():
 
 # --- Technical Indicators ---
 def add_advanced_indicators(df):
-    """Add advanced technical indicators"""
-    # Moving Averages
     df['sma_5'] = df['close'].rolling(5).mean()
     df['sma_10'] = df['close'].rolling(10).mean()
     df['sma_20'] = df['close'].rolling(20).mean()
     df['ema_9'] = df['close'].ewm(span=9).mean()
     df['ema_21'] = df['close'].ewm(span=21).mean()
     
-    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    # MACD
     df['macd'] = df['close'].ewm(span=12).mean() - df['close'].ewm(span=26).mean()
     df['macd_signal'] = df['macd'].ewm(span=9).mean()
     df['macd_hist'] = df['macd'] - df['macd_signal']
     
-    # Bollinger Bands
     df['bb_middle'] = df['close'].rolling(20).mean()
     bb_std = df['close'].rolling(20).std()
     df['bb_upper'] = df['bb_middle'] + 2 * bb_std
     df['bb_lower'] = df['bb_middle'] - 2 * bb_std
     df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
     
-    # Price Features
     df['return_1'] = df['close'].pct_change()
     df['return_5'] = df['close'].pct_change(5)
     df['return_10'] = df['close'].pct_change(10)
     df['price_range'] = (df['high'] - df['low']) / df['close']
     df['volume_ratio'] = df['volume'] / df['volume'].rolling(10).mean()
-    
-    # Volatility
     df['volatility'] = df['return_1'].rolling(10).std()
     
     return df
 
-# --- XGBoost Model (Fallback to Random Forest if XGBoost not installed) ---
+# --- Model ---
 def get_model():
-    """Try to use XGBoost, fallback to Random Forest"""
     try:
         from xgboost import XGBClassifier
         return XGBClassifier(n_estimators=50, max_depth=3, random_state=42, use_label_encoder=False)
@@ -255,7 +246,6 @@ def get_model():
         return RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
 
 def calculate_kelly_bet(win_prob, bankroll, max_risk_pct=0.02):
-    """Calculate optimal bet size"""
     odds = 1.0
     p = win_prob
     q = 1 - p
@@ -267,85 +257,19 @@ def calculate_kelly_bet(win_prob, bankroll, max_risk_pct=0.02):
         return 0
     return kelly_fraction * bankroll
 
-# --- Helper Functions for Color Coding ---
-def color_change(val):
-    """Color code percentage changes"""
-    if isinstance(val, str):
-        val = val.replace('%', '')
+def get_prediction_for_window(coin_symbol, window_minutes, df_clean=None):
+    """Get prediction for a specific time window (5m or 15m)"""
     try:
-        val = float(val)
-        if val > 0:
-            return 'color: #00b894'
-        elif val < 0:
-            return 'color: #ff6b6b'
-        else:
-            return 'color: #fdcb6e'
-    except:
-        return ''
-
-def color_confidence(val):
-    """Color code confidence"""
-    if isinstance(val, str):
-        val = val.replace('%', '')
-    try:
-        val = float(val)
-        if val >= 65:
-            return 'color: #00b894; font-weight: bold'
-        elif val >= 55:
-            return 'color: #fdcb6e; font-weight: bold'
-        else:
-            return 'color: #ff6b6b'
-    except:
-        return ''
-
-def direction_badge(direction, confidence):
-    """Generate HTML badge for direction signal"""
-    if direction == "UP":
-        return f'<span class="badge-up">⬆️ UP {confidence}</span>'
-    elif direction == "DOWN":
-        return f'<span class="badge-down">⬇️ DOWN {confidence}</span>'
-    else:
-        return f'<span class="badge-wait">⏳ WAIT</span>'
-
-# --- Main Prediction Loop ---
-all_results = []
-best_bets = []
-
-paprika_map = {
-    'BTC-USD': 'btc-bitcoin',
-    'ETH-USD': 'eth-ethereum',
-    'SOL-USD': 'sol-solana',
-    'BNB-USD': 'bnb-binance-coin',
-    'XRP-USD': 'xrp-xrp',
-    'DOGE-USD': 'doge-dogecoin'
-}
-
-fear_greed = fetch_fear_greed_index()
-
-# Progress bar
-progress_bar = st.progress(0)
-status_text = st.empty()
-
-for idx, coin in enumerate(COINS):
-    status_text.text(f"🔄 Analyzing {coin}...")
-    
-    try:
-        # Fetch data
-        df = fetch_yahoo_data(coin)
-        if df.empty:
-            continue
-        
-        df = add_advanced_indicators(df)
-        df_clean = df.dropna()
+        if df_clean is None:
+            df = fetch_yahoo_data(coin_symbol)
+            if df.empty:
+                return None
+            df = add_advanced_indicators(df)
+            df_clean = df.dropna()
         
         if len(df_clean) < 50:
-            continue
+            return None
         
-        # Get external data
-        paprika_data = fetch_coinpaprika_data(paprika_map[coin])
-        coin_name = coin.replace('-USD', '')
-        
-        # Features
         feature_cols = ['close', 'volume', 'return_1', 'return_5', 'return_10', 
                        'price_range', 'volume_ratio', 'rsi', 'sma_5', 'sma_10',
                        'sma_20', 'ema_9', 'ema_21', 'macd', 'macd_signal', 
@@ -353,32 +277,27 @@ for idx, coin in enumerate(COINS):
         
         available_cols = [col for col in feature_cols if col in df_clean.columns]
         X = df_clean[available_cols].values
-        y = df_clean['close'].shift(-PREDICT_WINDOW) > df_clean['close']
+        y = df_clean['close'].shift(-window_minutes) > df_clean['close']
         
         X_df = pd.DataFrame(X, columns=available_cols)
         X_df['target'] = y.astype(int)
         X_df_clean = X_df.dropna()
         
         if len(X_df_clean) < 30:
-            continue
+            return None
         
         X_train = X_df_clean[available_cols].values
         y_train = X_df_clean['target'].values
         
-        # Train model
         model = get_model()
         model.fit(X_train, y_train)
         
-        # Make prediction
         last_row = df_clean[available_cols].iloc[-1].values.reshape(1, -1)
         win_prob = model.predict_proba(last_row)[0][1]
         
-        # Determine direction and action
-        edge = win_prob - 0.50
-        bet_amount = calculate_kelly_bet(win_prob, BANKROLL, MAX_RISK_PER_TRADE)
         current_price = df_clean['close'].iloc[-1]
+        edge = win_prob - 0.50
         
-        # Direction logic
         if edge >= MIN_EDGE and win_prob > 0.55:
             if win_prob > 0.5:
                 direction = "UP"
@@ -393,43 +312,132 @@ for idx, coin in enumerate(COINS):
             action = "SKIP"
             is_signal = False
         
-        # Confidence level for display
-        if win_prob >= 0.65:
-            confidence_label = "🔴 High"
-        elif win_prob >= 0.55:
-            confidence_label = "🟡 Medium"
-        else:
-            confidence_label = "⚪ Low"
-        
-        # Get coin info
-        name, symbol, color = COIN_NAMES.get(coin, (coin_name, '', '#ffffff'))
-        
-        result = {
-            'Coin': symbol,
-            'Name': name,
-            'Price': current_price,
-            'Price_Str': f"${current_price:.2f}",
-            'Win_Prob': win_prob,
-            'Win_Prob_Str': f"{win_prob:.0%}",
-            'Edge': edge,
-            'Edge_Str': f"{edge:.0%}",
-            'Change_15m': paprika_data.get('percent_change_15m', 0),
-            'Change_24h': paprika_data.get('percent_change_24h', 0),
-            'Bet_Size': bet_amount,
-            'Bet_Size_Str': f"${bet_amount:.2f}" if bet_amount > 0 else "$0.00",
-            'Direction': direction,
-            'Action': action,
-            'Confidence_Label': confidence_label,
-            'Action_Color': color,
-            'Is_Signal': is_signal
+        return {
+            'win_prob': win_prob,
+            'edge': edge,
+            'direction': direction,
+            'action': action,
+            'is_signal': is_signal
         }
-        all_results.append(result)
-        
-        if is_signal:
-            best_bets.append(result)
-            
-    except Exception as e:
-        pass
+    except:
+        return None
+
+# --- Color Helpers ---
+def color_change(val):
+    if isinstance(val, str):
+        val = val.replace('%', '')
+    try:
+        val = float(val)
+        if val > 0:
+            return 'color: #00b894'
+        elif val < 0:
+            return 'color: #ff6b6b'
+        else:
+            return 'color: #fdcb6e'
+    except:
+        return ''
+
+def color_confidence(val):
+    if isinstance(val, str):
+        val = val.replace('%', '')
+    try:
+        val = float(val)
+        if val >= 65:
+            return 'color: #00b894; font-weight: bold'
+        elif val >= 55:
+            return 'color: #fdcb6e; font-weight: bold'
+        else:
+            return 'color: #ff6b6b'
+    except:
+        return ''
+
+# --- Main Prediction Loop ---
+all_results = []
+best_bets_5m = []
+best_bets_15m = []
+
+paprika_map = {
+    'BTC-USD': 'btc-bitcoin',
+    'ETH-USD': 'eth-ethereum',
+    'SOL-USD': 'sol-solana',
+    'BNB-USD': 'bnb-binance-coin',
+    'XRP-USD': 'xrp-xrp',
+    'DOGE-USD': 'doge-dogecoin'
+}
+
+fear_greed = fetch_fear_greed_index()
+
+progress_bar = st.progress(0)
+status_text = st.empty()
+
+# First pass: fetch all data once
+coin_data = {}
+for idx, coin in enumerate(COINS):
+    status_text.text(f"🔄 Fetching data for {coin}...")
+    df = fetch_yahoo_data(coin)
+    if not df.empty:
+        df = add_advanced_indicators(df)
+        df_clean = df.dropna()
+        if len(df_clean) >= 50:
+            coin_data[coin] = df_clean
+    progress_bar.progress((idx + 1) / len(COINS))
+
+# Second pass: generate predictions for 5m and 15m
+status_text.text("🔄 Generating predictions...")
+
+for idx, coin in enumerate(COINS):
+    if coin not in coin_data:
+        continue
+    
+    df_clean = coin_data[coin]
+    paprika_data = fetch_coinpaprika_data(paprika_map[coin])
+    coin_name = coin.replace('-USD', '')
+    current_price = df_clean['close'].iloc[-1]
+    name, symbol, color = COIN_NAMES.get(coin, (coin_name, '', '#ffffff'))
+    
+    # Get 5-minute prediction
+    pred_5m = get_prediction_for_window(coin, 5, df_clean)
+    
+    # Get 15-minute prediction
+    pred_15m = get_prediction_for_window(coin, 15, df_clean)
+    
+    # Calculate actual price changes
+    if len(df_clean) > 5:
+        change_5m = ((df_clean['close'].iloc[-1] - df_clean['close'].iloc[-6]) / df_clean['close'].iloc[-6]) * 100
+    else:
+        change_5m = 0
+    
+    if len(df_clean) > 15:
+        change_15m = ((df_clean['close'].iloc[-1] - df_clean['close'].iloc[-16]) / df_clean['close'].iloc[-16]) * 100
+    else:
+        change_15m = 0
+    
+    result = {
+        'Coin': symbol,
+        'Name': name,
+        'Price': current_price,
+        'Price_Str': f"${current_price:.2f}",
+        'Change_5m': change_5m,
+        'Change_15m': change_15m,
+        'Change_24h': paprika_data.get('percent_change_24h', 0),
+        '5m_Direction': pred_5m['direction'] if pred_5m else 'WAIT',
+        '5m_Win_Prob': f"{pred_5m['win_prob']:.0%}" if pred_5m else '—',
+        '5m_Edge': f"{pred_5m['edge']:.0%}" if pred_5m else '—',
+        '5m_Action': pred_5m['action'] if pred_5m else 'SKIP',
+        '5m_Is_Signal': pred_5m['is_signal'] if pred_5m else False,
+        '15m_Direction': pred_15m['direction'] if pred_15m else 'WAIT',
+        '15m_Win_Prob': f"{pred_15m['win_prob']:.0%}" if pred_15m else '—',
+        '15m_Edge': f"{pred_15m['edge']:.0%}" if pred_15m else '—',
+        '15m_Action': pred_15m['action'] if pred_15m else 'SKIP',
+        '15m_Is_Signal': pred_15m['is_signal'] if pred_15m else False,
+        'Action_Color': color
+    }
+    all_results.append(result)
+    
+    if pred_5m and pred_5m['is_signal']:
+        best_bets_5m.append(result)
+    if pred_15m and pred_15m['is_signal']:
+        best_bets_15m.append(result)
     
     progress_bar.progress((idx + 1) / len(COINS))
 
@@ -455,7 +463,7 @@ with fg_col3:
 
 st.divider()
 
-# --- Metric Cards with Direction Signals ---
+# --- Metric Cards ---
 st.markdown("### 📊 Market Overview")
 m_cols = st.columns(6)
 
@@ -464,16 +472,27 @@ for i, result in enumerate(all_results):
         with m_cols[i]:
             change_color = '#00b894' if result['Change_24h'] > 0 else '#ff6b6b' if result['Change_24h'] < 0 else '#fdcb6e'
             
-            # Direction CSS class
-            if result['Direction'] == "UP":
-                dir_class = "direction-up"
-                dir_emoji = "⬆️"
-            elif result['Direction'] == "DOWN":
-                dir_class = "direction-down"
-                dir_emoji = "⬇️"
+            # 5m direction
+            if result['5m_Direction'] == "UP":
+                dir_5m = "⬆️"
+                dir_class_5m = "direction-up"
+            elif result['5m_Direction'] == "DOWN":
+                dir_5m = "⬇️"
+                dir_class_5m = "direction-down"
             else:
-                dir_class = "direction-wait"
-                dir_emoji = "⏳"
+                dir_5m = "⏳"
+                dir_class_5m = "direction-wait"
+            
+            # 15m direction
+            if result['15m_Direction'] == "UP":
+                dir_15m = "⬆️"
+                dir_class_15m = "direction-up"
+            elif result['15m_Direction'] == "DOWN":
+                dir_15m = "⬇️"
+                dir_class_15m = "direction-down"
+            else:
+                dir_15m = "⏳"
+                dir_class_15m = "direction-wait"
             
             st.markdown(f"""
             <div class="metric-card">
@@ -482,21 +501,23 @@ for i, result in enumerate(all_results):
                 <div class="coin-change" style="color: {change_color};">
                     {result['Change_24h']:+.1f}%
                 </div>
-                <div>
-                    <span class="{dir_class}">{dir_emoji} {result['Direction']}</span>
+                <div style="display: flex; justify-content: center; gap: 0.5rem; margin-top: 0.3rem;">
+                    <span style="font-size: 0.7rem; color: #888;">5m</span>
+                    <span class="{dir_class_5m}">{dir_5m} {result['5m_Direction']}</span>
+                </div>
+                <div style="display: flex; justify-content: center; gap: 0.5rem;">
+                    <span style="font-size: 0.7rem; color: #888;">15m</span>
+                    <span class="{dir_class_15m}">{dir_15m} {result['15m_Direction']}</span>
                 </div>
                 <div class="coin-stats">
-                    Win: {result['Win_Prob_Str']} | Edge: {result['Edge_Str']}
-                </div>
-                <div class="coin-stats">
-                    {result['Confidence_Label']} Confidence
+                    5m: {result['5m_Win_Prob']} | 15m: {result['15m_Win_Prob']}
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
 st.divider()
 
-# --- Predictions Table ---
+# --- Detailed Predictions Table ---
 st.markdown("### 📈 Detailed Predictions")
 
 if all_results:
@@ -504,71 +525,77 @@ if all_results:
         'Coin': r['Coin'],
         'Name': r['Name'],
         'Price': r['Price_Str'],
-        'Direction': r['Direction'],
-        'Win Prob': r['Win_Prob_Str'],
-        'Edge': r['Edge_Str'],
-        '24h Change': f"{r['Change_24h']:+.1f}%",
+        '5m Direction': r['5m_Direction'],
+        '5m Win': r['5m_Win_Prob'],
+        '5m Edge': r['5m_Edge'],
+        '15m Direction': r['15m_Direction'],
+        '15m Win': r['15m_Win_Prob'],
+        '15m Edge': r['15m_Edge'],
+        '5m Change': f"{r['Change_5m']:+.1f}%",
         '15m Change': f"{r['Change_15m']:+.1f}%",
-        'Bet': r['Bet_Size_Str'],
-        'Confidence': r['Confidence_Label']
+        '24h Change': f"{r['Change_24h']:+.1f}%"
     } for r in all_results])
     
-    # Color code the dataframe
+    # Color code
     try:
-        styled_df = df_display.style.map(color_change, subset=['24h Change', '15m Change'])
-        styled_df = styled_df.map(color_confidence, subset=['Win Prob'])
+        styled_df = df_display.style.map(color_change, subset=['5m Change', '15m Change', '24h Change'])
+        styled_df = styled_df.map(color_confidence, subset=['5m Win', '15m Win'])
     except AttributeError:
-        styled_df = df_display.style.applymap(color_change, subset=['24h Change', '15m Change'])
-        styled_df = styled_df.applymap(color_confidence, subset=['Win Prob'])
+        styled_df = df_display.style.applymap(color_change, subset=['5m Change', '15m Change', '24h Change'])
+        styled_df = styled_df.applymap(color_confidence, subset=['5m Win', '15m Win'])
     
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 else:
-    st.warning("No predictions available. Please check data sources.")
+    st.warning("No predictions available.")
 
 st.divider()
 
 # --- Best Bets Section ---
 st.markdown("### ⭐ Best Bets")
 
-if best_bets:
-    cols = st.columns(min(len(best_bets), 3))
-    for i, bet in enumerate(best_bets[:6]):
-        col = cols[i % 3]
-        with col:
-            # Direction emoji
-            if bet['Direction'] == "UP":
-                dir_emoji = "⬆️"
-                dir_color = "#00b894"
-            else:
-                dir_emoji = "⬇️"
-                dir_color = "#ff6b6b"
-            
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("5-Minute Best Bets")
+    if best_bets_5m:
+        for bet in best_bets_5m[:3]:
+            dir_emoji = "⬆️" if bet['5m_Direction'] == "UP" else "⬇️"
+            dir_color = "#00b894" if bet['5m_Direction'] == "UP" else "#ff6b6b"
             st.markdown(f"""
             <div class="best-bet">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-size: 1.2rem;">{bet['Coin']}</span>
-                    <span style="font-size: 1.5rem; color: {dir_color};">{dir_emoji} {bet['Direction']}</span>
+                    <span style="font-size: 1.5rem; color: {dir_color};">{dir_emoji} {bet['5m_Direction']}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
-                    <span>Win: {bet['Win_Prob_Str']}</span>
-                    <span>Edge: {bet['Edge_Str']}</span>
-                    <span>Bet: {bet['Bet_Size_Str']}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
-                    <span>24h: {bet['Change_24h']:+.1f}%</span>
-                    <span>15m: {bet['Change_15m']:+.1f}%</span>
-                </div>
-                <div style="font-size: 0.8rem; opacity: 0.7; margin-top: 0.3rem;">
-                    {bet['Confidence_Label']} Confidence
+                    <span>Win: {bet['5m_Win_Prob']}</span>
+                    <span>Edge: {bet['5m_Edge']}</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-    <div class="skip-bet">
-        ⏳ No directional signals meet the minimum edge threshold. Waiting for better opportunities...
-    </div>
-    """, unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="skip-bet">⏳ No 5-minute signals</div>', unsafe_allow_html=True)
+
+with col2:
+    st.subheader("15-Minute Best Bets")
+    if best_bets_15m:
+        for bet in best_bets_15m[:3]:
+            dir_emoji = "⬆️" if bet['15m_Direction'] == "UP" else "⬇️"
+            dir_color = "#00b894" if bet['15m_Direction'] == "UP" else "#ff6b6b"
+            st.markdown(f"""
+            <div class="best-bet" style="background: linear-gradient(135deg, #fdcb6e 0%, #f39c12 100%); color: #1e1e2f;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 1.2rem;">{bet['Coin']}</span>
+                    <span style="font-size: 1.5rem; color: {dir_color};">{dir_emoji} {bet['15m_Direction']}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
+                    <span>Win: {bet['15m_Win_Prob']}</span>
+                    <span>Edge: {bet['15m_Edge']}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="skip-bet">⏳ No 15-minute signals</div>', unsafe_allow_html=True)
 
 st.divider()
 
@@ -605,10 +632,6 @@ if selected_coin:
                 margin=dict(l=0, r=0, t=0, b=0)
             )
             
-            fig.update_xaxes(title_text="Time", row=2, col=1)
-            fig.update_yaxes(title_text="Price ($)", row=1, col=1)
-            fig.update_yaxes(title_text="Volume", row=2, col=1)
-            
             st.plotly_chart(fig, use_container_width=True)
     except:
         st.warning("Chart data unavailable.")
@@ -621,7 +644,6 @@ with st.sidebar:
     st.markdown(f"**Bankroll:** ${BANKROLL:.2f}")
     st.markdown(f"**Max Risk/Trade:** {MAX_RISK_PER_TRADE*100:.0f}%")
     st.markdown(f"**Min Edge:** {MIN_EDGE*100:.0f}%")
-    st.markdown(f"**Predict Window:** {PREDICT_WINDOW} min")
     
     st.divider()
     
@@ -635,12 +657,11 @@ with st.sidebar:
     
     st.divider()
     
-    st.markdown("### 🎯 Directional Strategy")
+    st.markdown("### 🎯 How to Read")
     st.markdown("""
-    **⬆️ UP:** Model predicts price will rise  
-    **⬇️ DOWN:** Model predicts price will fall  
-    **⏳ WAIT:** No clear signal  
-    **Signal:** Win Prob > 55% + Edge > 5%  
+    **5m Direction:** Prediction for next 5 minutes  
+    **15m Direction:** Prediction for next 15 minutes  
+    **Both use:** Win Prob > 55% + Edge > 5%  
     **Sizing:** Kelly Criterion (capped at 2%)  
     """)
     
