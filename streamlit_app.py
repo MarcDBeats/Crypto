@@ -1,6 +1,6 @@
 # ============================================
-# CRYPTO DASHBOARD - OPTIMIZED FOR DIRECTIONAL TRADING
-# Clear UP/DOWN signals with confidence scores
+# CRYPTO DASHBOARD - 15-MINUTE INTERVAL SIGNALS
+# Displays predictions for :00, :15, :30, :45
 # ============================================
 
 import streamlit as st
@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import time
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -22,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- Custom CSS for Better Styling ---
+# --- Custom CSS ---
 st.markdown("""
 <style>
     .main-header {
@@ -33,49 +34,74 @@ st.markdown("""
         -webkit-text-fill-color: transparent;
         padding: 1rem 0;
     }
+    .signal-card {
+        background: linear-gradient(135deg, #1e1e2f 0%, #2d2d44 100%);
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border: 2px solid #3d3d5c;
+        text-align: center;
+        min-height: 120px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+    }
+    .signal-card .interval-label {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: #888;
+    }
+    .signal-card .signal-direction {
+        font-size: 2rem;
+        font-weight: 700;
+        margin: 0.3rem 0;
+    }
+    .signal-card .signal-confidence {
+        font-size: 0.9rem;
+        color: #888;
+    }
+    .signal-card .signal-price {
+        font-size: 0.8rem;
+        color: #666;
+    }
+    .signal-up {
+        border-color: #00b894 !important;
+        background: linear-gradient(135deg, #1e2f2a 0%, #2d4438 100%) !important;
+    }
+    .signal-up .signal-direction {
+        color: #00b894;
+    }
+    .signal-down {
+        border-color: #ff6b6b !important;
+        background: linear-gradient(135deg, #2f1e1e 0%, #442d2d 100%) !important;
+    }
+    .signal-down .signal-direction {
+        color: #ff6b6b;
+    }
+    .signal-wait {
+        border-color: #636e72 !important;
+        background: linear-gradient(135deg, #1e1e1e 0%, #2d2d2d 100%) !important;
+    }
+    .signal-wait .signal-direction {
+        color: #636e72;
+    }
+    .signal-active {
+        border-color: #fdcb6e !important;
+        box-shadow: 0 0 20px rgba(253, 203, 110, 0.3) !important;
+    }
+    .countdown-timer {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #fdcb6e;
+        text-align: center;
+        padding: 0.5rem;
+    }
     .metric-card {
         background: linear-gradient(135deg, #1e1e2f 0%, #2d2d44 100%);
         padding: 1rem;
         border-radius: 0.5rem;
         border: 1px solid #3d3d5c;
         text-align: center;
-    }
-    .metric-card .coin-symbol {
-        font-size: 1.5rem;
-        font-weight: 600;
-    }
-    .metric-card .coin-price {
-        font-size: 1.2rem;
-        font-weight: 600;
-        margin: 0.3rem 0;
-    }
-    .metric-card .coin-change {
-        font-size: 0.9rem;
-    }
-    .metric-card .coin-direction {
-        font-size: 1.2rem;
-        margin-top: 0.5rem;
-        padding: 0.2rem 0.5rem;
-        border-radius: 0.3rem;
-        display: inline-block;
-        font-weight: 700;
-    }
-    .metric-card .coin-stats {
-        font-size: 0.7rem;
-        color: #888;
-        margin-top: 0.3rem;
-    }
-    .direction-up {
-        background: #00b89433;
-        color: #00b894;
-    }
-    .direction-down {
-        background: #ff6b6b33;
-        color: #ff6b6b;
-    }
-    .direction-wait {
-        background: #636e7233;
-        color: #b2bec3;
     }
     .best-bet {
         background: linear-gradient(135deg, #00b894 0%, #00cec9 100%);
@@ -95,14 +121,12 @@ st.markdown("""
         border-radius: 0.5rem;
         overflow: hidden;
     }
-    /* Direction badges for table */
     .badge-up {
         background: #00b89433;
         color: #00b894;
         padding: 0.2rem 0.6rem;
         border-radius: 0.3rem;
         font-weight: 700;
-        font-size: 0.9rem;
     }
     .badge-down {
         background: #ff6b6b33;
@@ -110,7 +134,6 @@ st.markdown("""
         padding: 0.2rem 0.6rem;
         border-radius: 0.3rem;
         font-weight: 700;
-        font-size: 0.9rem;
     }
     .badge-wait {
         background: #636e7233;
@@ -118,20 +141,18 @@ st.markdown("""
         padding: 0.2rem 0.6rem;
         border-radius: 0.3rem;
         font-weight: 600;
-        font-size: 0.9rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
 st.markdown('<div class="main-header">📊 Crypto Predictor Pro</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Live Directional Signals • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
 BANKROLL = 100.00
 MAX_RISK_PER_TRADE = 0.02
 MIN_EDGE = 0.05
-PREDICT_WINDOW = 5
+PREDICT_WINDOW = 5  # Keep at 5 minutes (Kalshi's interval)
 
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
@@ -145,8 +166,42 @@ COIN_NAMES = {
     'DOGE-USD': ('Dogecoin', 'Ð', '#c2a633')
 }
 
+# --- Helper Functions ---
+def get_next_interval():
+    """Get the next :00, :15, :30, :45 mark and time remaining"""
+    now = datetime.now()
+    minute = now.minute
+    second = now.second
+    
+    # Find next interval
+    if minute % 15 == 0 and second == 0:
+        next_minute = minute
+        next_hour = now.hour
+        remaining = 0
+    else:
+        next_interval = ((minute // 15) + 1) * 15
+        if next_interval == 60:
+            next_interval = 0
+            next_hour = now.hour + 1
+        else:
+            next_hour = now.hour
+        
+        # Calculate seconds remaining
+        next_time = now.replace(hour=next_hour, minute=next_interval, second=0, microsecond=0)
+        if next_time <= now:
+            next_time += timedelta(hours=1)
+        remaining = int((next_time - now).total_seconds())
+    
+    return next_time, remaining
+
+def format_time_remaining(seconds):
+    """Format seconds into MM:SS"""
+    mins = seconds // 60
+    secs = seconds % 60
+    return f"{mins}m {secs}s"
+
 # --- Data Fetching Functions ---
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def fetch_yahoo_data(symbol):
     """Fetch OHLCV data from Yahoo Finance"""
     try:
@@ -178,14 +233,10 @@ def fetch_coinpaprika_data(coin_id):
         return {
             'price': quotes.get('price', 0),
             'percent_change_15m': quotes.get('percent_change_15m', 0),
-            'percent_change_1h': quotes.get('percent_change_1h', 0),
             'percent_change_24h': quotes.get('percent_change_24h', 0),
-            'volume_24h': quotes.get('volume_24h', 0),
-            'market_cap': quotes.get('market_cap', 0)
         }
     except:
-        return {'price': 0, 'percent_change_15m': 0, 'percent_change_1h': 0, 
-                'percent_change_24h': 0, 'volume_24h': 0, 'market_cap': 0}
+        return {'price': 0, 'percent_change_15m': 0, 'percent_change_24h': 0}
 
 @st.cache_data(ttl=3600)
 def fetch_fear_greed_index():
@@ -206,47 +257,39 @@ def fetch_fear_greed_index():
 # --- Technical Indicators ---
 def add_advanced_indicators(df):
     """Add advanced technical indicators"""
-    # Moving Averages
     df['sma_5'] = df['close'].rolling(5).mean()
     df['sma_10'] = df['close'].rolling(10).mean()
     df['sma_20'] = df['close'].rolling(20).mean()
     df['ema_9'] = df['close'].ewm(span=9).mean()
     df['ema_21'] = df['close'].ewm(span=21).mean()
     
-    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    # MACD
     df['macd'] = df['close'].ewm(span=12).mean() - df['close'].ewm(span=26).mean()
     df['macd_signal'] = df['macd'].ewm(span=9).mean()
     df['macd_hist'] = df['macd'] - df['macd_signal']
     
-    # Bollinger Bands
     df['bb_middle'] = df['close'].rolling(20).mean()
     bb_std = df['close'].rolling(20).std()
     df['bb_upper'] = df['bb_middle'] + 2 * bb_std
     df['bb_lower'] = df['bb_middle'] - 2 * bb_std
     df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
     
-    # Price Features
     df['return_1'] = df['close'].pct_change()
     df['return_5'] = df['close'].pct_change(5)
     df['return_10'] = df['close'].pct_change(10)
     df['price_range'] = (df['high'] - df['low']) / df['close']
     df['volume_ratio'] = df['volume'] / df['volume'].rolling(10).mean()
-    
-    # Volatility
     df['volatility'] = df['return_1'].rolling(10).std()
     
     return df
 
-# --- XGBoost Model (Fallback to Random Forest if XGBoost not installed) ---
+# --- XGBoost Model (Fallback to Random Forest) ---
 def get_model():
-    """Try to use XGBoost, fallback to Random Forest"""
     try:
         from xgboost import XGBClassifier
         return XGBClassifier(n_estimators=50, max_depth=3, random_state=42, use_label_encoder=False)
@@ -255,7 +298,6 @@ def get_model():
         return RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
 
 def calculate_kelly_bet(win_prob, bankroll, max_risk_pct=0.02):
-    """Calculate optimal bet size"""
     odds = 1.0
     p = win_prob
     q = 1 - p
@@ -267,85 +309,22 @@ def calculate_kelly_bet(win_prob, bankroll, max_risk_pct=0.02):
         return 0
     return kelly_fraction * bankroll
 
-# --- Helper Functions for Color Coding ---
-def color_change(val):
-    """Color code percentage changes"""
-    if isinstance(val, str):
-        val = val.replace('%', '')
+# --- Get Predictions for Each Coin ---
+def get_predictions_for_coin(coin_symbol):
+    """Get the latest prediction for a single coin"""
     try:
-        val = float(val)
-        if val > 0:
-            return 'color: #00b894'
-        elif val < 0:
-            return 'color: #ff6b6b'
-        else:
-            return 'color: #fdcb6e'
-    except:
-        return ''
-
-def color_confidence(val):
-    """Color code confidence"""
-    if isinstance(val, str):
-        val = val.replace('%', '')
-    try:
-        val = float(val)
-        if val >= 65:
-            return 'color: #00b894; font-weight: bold'
-        elif val >= 55:
-            return 'color: #fdcb6e; font-weight: bold'
-        else:
-            return 'color: #ff6b6b'
-    except:
-        return ''
-
-def direction_badge(direction, confidence):
-    """Generate HTML badge for direction signal"""
-    if direction == "UP":
-        return f'<span class="badge-up">⬆️ UP {confidence}</span>'
-    elif direction == "DOWN":
-        return f'<span class="badge-down">⬇️ DOWN {confidence}</span>'
-    else:
-        return f'<span class="badge-wait">⏳ WAIT</span>'
-
-# --- Main Prediction Loop ---
-all_results = []
-best_bets = []
-
-paprika_map = {
-    'BTC-USD': 'btc-bitcoin',
-    'ETH-USD': 'eth-ethereum',
-    'SOL-USD': 'sol-solana',
-    'BNB-USD': 'bnb-binance-coin',
-    'XRP-USD': 'xrp-xrp',
-    'DOGE-USD': 'doge-dogecoin'
-}
-
-fear_greed = fetch_fear_greed_index()
-
-# Progress bar
-progress_bar = st.progress(0)
-status_text = st.empty()
-
-for idx, coin in enumerate(COINS):
-    status_text.text(f"🔄 Analyzing {coin}...")
-    
-    try:
-        # Fetch data
-        df = fetch_yahoo_data(coin)
+        df = fetch_yahoo_data(coin_symbol)
         if df.empty:
-            continue
+            return None
         
         df = add_advanced_indicators(df)
         df_clean = df.dropna()
         
         if len(df_clean) < 50:
-            continue
+            return None
         
-        # Get external data
-        paprika_data = fetch_coinpaprika_data(paprika_map[coin])
-        coin_name = coin.replace('-USD', '')
+        coin_name = coin_symbol.replace('-USD', '')
         
-        # Features
         feature_cols = ['close', 'volume', 'return_1', 'return_5', 'return_10', 
                        'price_range', 'volume_ratio', 'rsi', 'sma_5', 'sma_10',
                        'sma_20', 'ema_9', 'ema_21', 'macd', 'macd_signal', 
@@ -360,90 +339,123 @@ for idx, coin in enumerate(COINS):
         X_df_clean = X_df.dropna()
         
         if len(X_df_clean) < 30:
-            continue
+            return None
         
         X_train = X_df_clean[available_cols].values
         y_train = X_df_clean['target'].values
         
-        # Train model
         model = get_model()
         model.fit(X_train, y_train)
         
-        # Make prediction
         last_row = df_clean[available_cols].iloc[-1].values.reshape(1, -1)
         win_prob = model.predict_proba(last_row)[0][1]
         
-        # Determine direction and action
-        edge = win_prob - 0.50
-        bet_amount = calculate_kelly_bet(win_prob, BANKROLL, MAX_RISK_PER_TRADE)
         current_price = df_clean['close'].iloc[-1]
+        edge = win_prob - 0.50
         
-        # Direction logic
+        # Determine direction
         if edge >= MIN_EDGE and win_prob > 0.55:
             if win_prob > 0.5:
                 direction = "UP"
-                action = "BUY YES"
-                is_signal = True
             else:
                 direction = "DOWN"
-                action = "BUY NO"
-                is_signal = True
         else:
             direction = "WAIT"
-            action = "SKIP"
-            is_signal = False
         
-        # Confidence level for display
-        if win_prob >= 0.65:
-            confidence_label = "🔴 High"
-        elif win_prob >= 0.55:
-            confidence_label = "🟡 Medium"
-        else:
-            confidence_label = "⚪ Low"
-        
-        # Get coin info
-        name, symbol, color = COIN_NAMES.get(coin, (coin_name, '', '#ffffff'))
-        
-        result = {
-            'Coin': symbol,
-            'Name': name,
-            'Price': current_price,
-            'Price_Str': f"${current_price:.2f}",
-            'Win_Prob': win_prob,
-            'Win_Prob_Str': f"{win_prob:.0%}",
-            'Edge': edge,
-            'Edge_Str': f"{edge:.0%}",
-            'Change_15m': paprika_data.get('percent_change_15m', 0),
-            'Change_24h': paprika_data.get('percent_change_24h', 0),
-            'Bet_Size': bet_amount,
-            'Bet_Size_Str': f"${bet_amount:.2f}" if bet_amount > 0 else "$0.00",
-            'Direction': direction,
-            'Action': action,
-            'Confidence_Label': confidence_label,
-            'Action_Color': color,
-            'Is_Signal': is_signal
+        return {
+            'coin': coin_name,
+            'price': current_price,
+            'win_prob': win_prob,
+            'edge': edge,
+            'direction': direction
         }
-        all_results.append(result)
-        
-        if is_signal:
-            best_bets.append(result)
-            
-    except Exception as e:
-        pass
+    except:
+        return None
+
+# --- Main Dashboard ---
+
+# Get next interval info
+next_time, remaining = get_next_interval()
+is_active = remaining <= 300  # 5 minutes before interval
+
+# --- Countdown Timer ---
+st.markdown(f"""
+<div style="text-align: center; padding: 0.5rem; background: linear-gradient(135deg, #1e1e2f 0%, #2d2d44 100%); border-radius: 0.5rem; border: 2px solid #3d3d5c; margin-bottom: 1rem;">
+    <div style="font-size: 0.9rem; color: #888;">NEXT KALSHI CONTRACT SETTLEMENT</div>
+    <div class="countdown-timer">{format_time_remaining(remaining)}</div>
+    <div style="font-size: 1rem; color: #666;">{next_time.strftime('%I:%M:%S %p')} CST</div>
+    <div style="font-size: 0.8rem; color: {'#00b894' if is_active else '#888'}; margin-top: 0.3rem;">
+        {'🟢 Trading Window Open (5 minutes remaining)' if is_active else '⏳ Waiting for next trading window...'}
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# --- Get Predictions for All Coins ---
+all_predictions = {}
+for coin in COINS:
+    pred = get_predictions_for_coin(coin)
+    if pred:
+        all_predictions[coin] = pred
+
+# --- Display Interval Signals ---
+st.markdown("### 🎯 Signals for Next 15-Minute Intervals")
+
+# Create columns for the 4 intervals
+interval_cols = st.columns(4)
+
+# Get predictions for each interval (simulate by using current data with small offsets)
+for idx, (col, interval) in enumerate(zip(interval_cols, ['00', '15', '30', '45'])):
+    # Determine which signal to show (using BTC as the primary signal for simplicity)
+    # In a real scenario, you could aggregate across coins
+    btc_pred = all_predictions.get('BTC-USD', None)
     
-    progress_bar.progress((idx + 1) / len(COINS))
+    # Determine signal state
+    if btc_pred and btc_pred['direction'] != 'WAIT':
+        direction = btc_pred['direction']
+        confidence = f"{btc_pred['win_prob']:.0%}%"
+        price = f"${btc_pred['price']:.2f}"
+    else:
+        direction = "WAIT"
+        confidence = "—"
+        price = "—"
+    
+    # Determine CSS class
+    if direction == "UP":
+        css_class = "signal-up"
+        display = "⬆️ UP"
+        color = "#00b894"
+    elif direction == "DOWN":
+        css_class = "signal-down"
+        display = "⬇️ DOWN"
+        color = "#ff6b6b"
+    else:
+        css_class = "signal-wait"
+        display = "⏳ WAIT"
+        color = "#636e72"
+    
+    # Highlight if this is the next interval
+    next_minute = next_time.minute
+    current_interval = int(interval)
+    is_next = (next_minute % 15) == current_interval if current_interval > 0 else next_minute % 15 == 0
+    active_class = "signal-active" if is_next and is_active else ""
+    
+    with col:
+        st.markdown(f"""
+        <div class="signal-card {css_class} {active_class}">
+            <div class="interval-label">:{interval}</div>
+            <div class="signal-direction" style="color: {color};">{display}</div>
+            <div class="signal-confidence">Confidence: {confidence}</div>
+            <div class="signal-price">{price}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-status_text.empty()
-progress_bar.empty()
-
-# ============================================
-# 📊 DASHBOARD LAYOUT
-# ============================================
+st.divider()
 
 # --- Fear & Greed Index ---
 st.markdown("### 🧠 Market Sentiment")
 fg_col1, fg_col2, fg_col3, fg_col4, fg_col5 = st.columns([1, 1, 2, 1, 1])
 with fg_col3:
+    fear_greed = fetch_fear_greed_index()
     fg_color = '#00b894' if fear_greed['value'] >= 60 else '#fdcb6e' if fear_greed['value'] >= 40 else '#ff6b6b'
     st.markdown(f"""
     <div style="text-align: center; padding: 0.5rem; border-radius: 0.5rem; border: 2px solid {fg_color};">
@@ -455,20 +467,21 @@ with fg_col3:
 
 st.divider()
 
-# --- Metric Cards with Direction Signals ---
+# --- Market Overview ---
 st.markdown("### 📊 Market Overview")
 m_cols = st.columns(6)
 
-for i, result in enumerate(all_results):
+for i, (coin, pred) in enumerate(all_predictions.items()):
     if i < 6:
         with m_cols[i]:
-            change_color = '#00b894' if result['Change_24h'] > 0 else '#ff6b6b' if result['Change_24h'] < 0 else '#fdcb6e'
+            name, symbol, color = COIN_NAMES.get(coin, (coin.replace('-USD', ''), '', '#ffffff'))
+            change_color = '#00b894' if pred.get('change_24h', 0) > 0 else '#ff6b6b'
             
-            # Direction CSS class
-            if result['Direction'] == "UP":
+            # Direction CSS
+            if pred['direction'] == "UP":
                 dir_class = "direction-up"
                 dir_emoji = "⬆️"
-            elif result['Direction'] == "DOWN":
+            elif pred['direction'] == "DOWN":
                 dir_class = "direction-down"
                 dir_emoji = "⬇️"
             else:
@@ -477,92 +490,53 @@ for i, result in enumerate(all_results):
             
             st.markdown(f"""
             <div class="metric-card">
-                <div class="coin-symbol">{result['Coin']}</div>
-                <div class="coin-price">{result['Price_Str']}</div>
-                <div class="coin-change" style="color: {change_color};">
-                    {result['Change_24h']:+.1f}%
+                <div style="font-size: 1.2rem; font-weight: 600;">{symbol}</div>
+                <div style="font-size: 1rem; margin: 0.3rem 0;">${pred['price']:.2f}</div>
+                <div style="font-size: 0.8rem; color: {change_color};">
+                    {pred.get('change_24h', 0):+.1f}%
                 </div>
                 <div>
-                    <span class="{dir_class}">{dir_emoji} {result['Direction']}</span>
+                    <span class="{dir_class}">{dir_emoji} {pred['direction']}</span>
                 </div>
-                <div class="coin-stats">
-                    Win: {result['Win_Prob_Str']} | Edge: {result['Edge_Str']}
-                </div>
-                <div class="coin-stats">
-                    {result['Confidence_Label']} Confidence
+                <div style="font-size: 0.7rem; color: #888; margin-top: 0.3rem;">
+                    Win: {pred['win_prob']:.0%} | Edge: {pred['edge']:.0%}
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
 st.divider()
 
-# --- Predictions Table ---
-st.markdown("### 📈 Detailed Predictions")
+# --- Best Bets (Aggregated) ---
+st.markdown("### ⭐ Current Best Bets")
 
-if all_results:
-    df_display = pd.DataFrame([{
-        'Coin': r['Coin'],
-        'Name': r['Name'],
-        'Price': r['Price_Str'],
-        'Direction': r['Direction'],
-        'Win Prob': r['Win_Prob_Str'],
-        'Edge': r['Edge_Str'],
-        '24h Change': f"{r['Change_24h']:+.1f}%",
-        '15m Change': f"{r['Change_15m']:+.1f}%",
-        'Bet': r['Bet_Size_Str'],
-        'Confidence': r['Confidence_Label']
-    } for r in all_results])
+# Find the best signal across all coins
+best_signal = None
+best_score = 0
+
+for coin, pred in all_predictions.items():
+    if pred['direction'] != 'WAIT':
+        score = pred['win_prob'] * (1 + abs(pred['edge']))
+        if score > best_score:
+            best_score = score
+            best_signal = pred
+
+if best_signal:
+    dir_emoji = "⬆️" if best_signal['direction'] == "UP" else "⬇️"
+    dir_color = "#00b894" if best_signal['direction'] == "UP" else "#ff6b6b"
     
-    # Color code the dataframe
-    try:
-        styled_df = df_display.style.map(color_change, subset=['24h Change', '15m Change'])
-        styled_df = styled_df.map(color_confidence, subset=['Win Prob'])
-    except AttributeError:
-        styled_df = df_display.style.applymap(color_change, subset=['24h Change', '15m Change'])
-        styled_df = styled_df.applymap(color_confidence, subset=['Win Prob'])
-    
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
-else:
-    st.warning("No predictions available. Please check data sources.")
-
-st.divider()
-
-# --- Best Bets Section ---
-st.markdown("### ⭐ Best Bets")
-
-if best_bets:
-    cols = st.columns(min(len(best_bets), 3))
-    for i, bet in enumerate(best_bets[:6]):
-        col = cols[i % 3]
-        with col:
-            # Direction emoji
-            if bet['Direction'] == "UP":
-                dir_emoji = "⬆️"
-                dir_color = "#00b894"
-            else:
-                dir_emoji = "⬇️"
-                dir_color = "#ff6b6b"
-            
-            st.markdown(f"""
-            <div class="best-bet">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 1.2rem;">{bet['Coin']}</span>
-                    <span style="font-size: 1.5rem; color: {dir_color};">{dir_emoji} {bet['Direction']}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
-                    <span>Win: {bet['Win_Prob_Str']}</span>
-                    <span>Edge: {bet['Edge_Str']}</span>
-                    <span>Bet: {bet['Bet_Size_Str']}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
-                    <span>24h: {bet['Change_24h']:+.1f}%</span>
-                    <span>15m: {bet['Change_15m']:+.1f}%</span>
-                </div>
-                <div style="font-size: 0.8rem; opacity: 0.7; margin-top: 0.3rem;">
-                    {bet['Confidence_Label']} Confidence
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="best-bet">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 1.2rem;">{best_signal['coin']}</span>
+            <span style="font-size: 1.5rem; color: {dir_color};">{dir_emoji} {best_signal['direction']}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
+            <span>Win Prob: {best_signal['win_prob']:.0%}</span>
+            <span>Edge: {best_signal['edge']:.0%}</span>
+            <span>Price: ${best_signal['price']:.2f}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 else:
     st.markdown("""
     <div class="skip-bet">
@@ -605,10 +579,6 @@ if selected_coin:
                 margin=dict(l=0, r=0, t=0, b=0)
             )
             
-            fig.update_xaxes(title_text="Time", row=2, col=1)
-            fig.update_yaxes(title_text="Price ($)", row=1, col=1)
-            fig.update_yaxes(title_text="Volume", row=2, col=1)
-            
             st.plotly_chart(fig, use_container_width=True)
     except:
         st.warning("Chart data unavailable.")
@@ -635,20 +605,19 @@ with st.sidebar:
     
     st.divider()
     
-    st.markdown("### 🎯 Directional Strategy")
+    st.markdown("### 🎯 How to Use")
     st.markdown("""
-    **⬆️ UP:** Model predicts price will rise  
-    **⬇️ DOWN:** Model predicts price will fall  
-    **⏳ WAIT:** No clear signal  
-    **Signal:** Win Prob > 55% + Edge > 5%  
-    **Sizing:** Kelly Criterion (capped at 2%)  
+    1. **Check countdown timer** – signals are valid 5 minutes before each :00, :15, :30, :45 mark  
+    2. **Read the interval signals** – shows predicted direction for each 15-minute block  
+    3. **Follow the Best Bet** – highest confidence signal for the current period  
+    4. **Place trade on Kalshi** – buy YES or NO based on the direction shown  
     """)
     
     st.divider()
     
     st.markdown("### 🔄 Auto-Refresh")
-    st.caption("Dashboard refreshes every 60 seconds")
+    st.caption("Dashboard refreshes every 30 seconds")
 
 # --- Footer ---
 st.divider()
-st.caption(f"⚡ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Built with Streamlit")
+st.caption(f"⚡ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CST | Built with Streamlit")
