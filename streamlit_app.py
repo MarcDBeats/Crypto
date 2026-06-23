@@ -38,6 +38,31 @@ st.markdown("""
         padding: 1rem;
         border-radius: 0.5rem;
         border: 1px solid #3d3d5c;
+        text-align: center;
+    }
+    .metric-card .coin-symbol {
+        font-size: 1.5rem;
+        font-weight: 600;
+    }
+    .metric-card .coin-price {
+        font-size: 1.2rem;
+        font-weight: 600;
+        margin: 0.3rem 0;
+    }
+    .metric-card .coin-change {
+        font-size: 0.9rem;
+    }
+    .metric-card .coin-action {
+        font-size: 0.9rem;
+        margin-top: 0.5rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.3rem;
+        display: inline-block;
+    }
+    .metric-card .coin-stats {
+        font-size: 0.7rem;
+        color: #888;
+        margin-top: 0.3rem;
     }
     .best-bet {
         background: linear-gradient(135deg, #00b894 0%, #00cec9 100%);
@@ -50,12 +75,33 @@ st.markdown("""
         background: linear-gradient(135deg, #636e72 0%, #2d3436 100%);
         padding: 1rem;
         border-radius: 0.5rem;
-        color: white;
+        color: #b2bec3;
         font-weight: 600;
     }
     .stDataFrame {
         border-radius: 0.5rem;
         overflow: hidden;
+    }
+    .action-buy-yes {
+        background: #00b89433;
+        color: #00b894;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.3rem;
+        font-weight: 600;
+    }
+    .action-buy-no {
+        background: #ff6b6b33;
+        color: #ff6b6b;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.3rem;
+        font-weight: 600;
+    }
+    .action-skip {
+        background: #636e7233;
+        color: #b2bec3;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.3rem;
+        font-weight: 600;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -139,18 +185,6 @@ def fetch_fear_greed_index():
         return {'value': 50, 'classification': 'Neutral'}
     except:
         return {'value': 50, 'classification': 'Neutral'}
-
-@st.cache_data(ttl=60)
-def fetch_news_sentiment(coin_name):
-    """Fetch recent news sentiment (using Google News RSS)"""
-    try:
-        # Using a free news API (replace with your preferred source)
-        url = f"https://newsapi.org/v2/everything?q={coin_name}&language=en&pageSize=10"
-        # Note: NewsAPI requires a free API key
-        # For now, return mock data
-        return {'sentiment': 0.5, 'articles': 5}
-    except:
-        return {'sentiment': 0.5, 'articles': 0}
 
 # --- Technical Indicators ---
 def add_advanced_indicators(df):
@@ -246,6 +280,16 @@ def color_confidence(val):
             return 'color: #ff6b6b'
     except:
         return ''
+
+def color_action(val):
+    """Color code action labels"""
+    if 'BUY YES' in val:
+        return 'background-color: #00b89433; color: #00b894; font-weight: bold; padding: 0.2rem 0.5rem; border-radius: 0.3rem;'
+    elif 'BUY NO' in val:
+        return 'background-color: #ff6b6b33; color: #ff6b6b; font-weight: bold; padding: 0.2rem 0.5rem; border-radius: 0.3rem;'
+    elif 'SKIP' in val:
+        return 'background-color: #636e7233; color: #b2bec3; font-weight: bold; padding: 0.2rem 0.5rem; border-radius: 0.3rem;'
+    return ''
 
 # --- Main Prediction Loop ---
 all_results = []
@@ -386,19 +430,27 @@ for i, result in enumerate(all_results):
         with m_cols[i]:
             color = result['Action_Color']
             change_color = '#00b894' if result['Change_24h'] > 0 else '#ff6b6b' if result['Change_24h'] < 0 else '#fdcb6e'
+            
+            # Action label with proper styling
+            action = result['Action']
+            if 'BUY YES' in action:
+                action_class = 'action-buy-yes'
+            elif 'BUY NO' in action:
+                action_class = 'action-buy-no'
+            else:
+                action_class = 'action-skip'
+            
             st.markdown(f"""
-            <div class="metric-card" style="text-align: center;">
-                <div style="font-size: 1.5rem;">{result['Coin']}</div>
-                <div style="font-size: 1.2rem; font-weight: 600;">{result['Price_Str']}</div>
-                <div style="font-size: 0.9rem; color: {change_color};">
+            <div class="metric-card">
+                <div class="coin-symbol">{result['Coin']}</div>
+                <div class="coin-price">{result['Price_Str']}</div>
+                <div class="coin-change" style="color: {change_color};">
                     {result['Change_24h']:+.1f}%
                 </div>
-                <div style="font-size: 0.9rem; margin-top: 0.5rem;">
-                    <span style="background: {color}22; padding: 0.2rem 0.5rem; border-radius: 0.3rem;">
-                        {result['Action']}
-                    </span>
+                <div>
+                    <span class="{action_class}">{action}</span>
                 </div>
-                <div style="font-size: 0.7rem; color: #888;">
+                <div class="coin-stats">
                     Win: {result['Win_Prob_Str']} | Edge: {result['Edge_Str']}
                 </div>
             </div>
@@ -422,9 +474,17 @@ if all_results:
         'Action': r['Action']
     } for r in all_results])
     
-    # Color code the dataframe
-    styled_df = df_display.style.applymap(color_change, subset=['24h Change', '15m Change'])
-    styled_df = styled_df.applymap(color_confidence, subset=['Win Prob'])
+    # Color code the dataframe using .map (newer pandas) or .applymap (older)
+    try:
+        # Try the new .map method (pandas 2.1+)
+        styled_df = df_display.style.map(color_change, subset=['24h Change', '15m Change'])
+        styled_df = styled_df.map(color_confidence, subset=['Win Prob'])
+        styled_df = styled_df.map(color_action, subset=['Action'])
+    except AttributeError:
+        # Fallback to .applymap for older pandas
+        styled_df = df_display.style.applymap(color_change, subset=['24h Change', '15m Change'])
+        styled_df = styled_df.applymap(color_confidence, subset=['Win Prob'])
+        styled_df = styled_df.applymap(color_action, subset=['Action'])
     
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 else:
