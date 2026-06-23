@@ -1,6 +1,6 @@
 # ============================================
-# CRYPTO DASHBOARD - UPGRADED VERSION
-# XGBoost Model + Sentiment + Charts
+# CRYPTO DASHBOARD - OPTIMIZED FOR DIRECTIONAL TRADING
+# Clear UP/DOWN signals with confidence scores
 # ============================================
 
 import streamlit as st
@@ -52,17 +52,30 @@ st.markdown("""
     .metric-card .coin-change {
         font-size: 0.9rem;
     }
-    .metric-card .coin-action {
-        font-size: 0.9rem;
+    .metric-card .coin-direction {
+        font-size: 1.2rem;
         margin-top: 0.5rem;
         padding: 0.2rem 0.5rem;
         border-radius: 0.3rem;
         display: inline-block;
+        font-weight: 700;
     }
     .metric-card .coin-stats {
         font-size: 0.7rem;
         color: #888;
         margin-top: 0.3rem;
+    }
+    .direction-up {
+        background: #00b89433;
+        color: #00b894;
+    }
+    .direction-down {
+        background: #ff6b6b33;
+        color: #ff6b6b;
+    }
+    .direction-wait {
+        background: #636e7233;
+        color: #b2bec3;
     }
     .best-bet {
         background: linear-gradient(135deg, #00b894 0%, #00cec9 100%);
@@ -82,33 +95,37 @@ st.markdown("""
         border-radius: 0.5rem;
         overflow: hidden;
     }
-    .action-buy-yes {
+    /* Direction badges for table */
+    .badge-up {
         background: #00b89433;
         color: #00b894;
-        padding: 0.2rem 0.5rem;
+        padding: 0.2rem 0.6rem;
         border-radius: 0.3rem;
-        font-weight: 600;
+        font-weight: 700;
+        font-size: 0.9rem;
     }
-    .action-buy-no {
+    .badge-down {
         background: #ff6b6b33;
         color: #ff6b6b;
-        padding: 0.2rem 0.5rem;
+        padding: 0.2rem 0.6rem;
         border-radius: 0.3rem;
-        font-weight: 600;
+        font-weight: 700;
+        font-size: 0.9rem;
     }
-    .action-skip {
+    .badge-wait {
         background: #636e7233;
         color: #b2bec3;
-        padding: 0.2rem 0.5rem;
+        padding: 0.2rem 0.6rem;
         border-radius: 0.3rem;
         font-weight: 600;
+        font-size: 0.9rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
 st.markdown('<div class="main-header">📊 Crypto Predictor Pro</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Live Predictions • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Live Directional Signals • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
 BANKROLL = 100.00
@@ -281,15 +298,14 @@ def color_confidence(val):
     except:
         return ''
 
-def color_action(val):
-    """Color code action labels"""
-    if 'BUY YES' in val:
-        return 'background-color: #00b89433; color: #00b894; font-weight: bold; padding: 0.2rem 0.5rem; border-radius: 0.3rem;'
-    elif 'BUY NO' in val:
-        return 'background-color: #ff6b6b33; color: #ff6b6b; font-weight: bold; padding: 0.2rem 0.5rem; border-radius: 0.3rem;'
-    elif 'SKIP' in val:
-        return 'background-color: #636e7233; color: #b2bec3; font-weight: bold; padding: 0.2rem 0.5rem; border-radius: 0.3rem;'
-    return ''
+def direction_badge(direction, confidence):
+    """Generate HTML badge for direction signal"""
+    if direction == "UP":
+        return f'<span class="badge-up">⬆️ UP {confidence}</span>'
+    elif direction == "DOWN":
+        return f'<span class="badge-down">⬇️ DOWN {confidence}</span>'
+    else:
+        return f'<span class="badge-wait">⏳ WAIT</span>'
 
 # --- Main Prediction Loop ---
 all_results = []
@@ -357,17 +373,33 @@ for idx, coin in enumerate(COINS):
         last_row = df_clean[available_cols].iloc[-1].values.reshape(1, -1)
         win_prob = model.predict_proba(last_row)[0][1]
         
-        # Determine action
+        # Determine direction and action
         edge = win_prob - 0.50
         bet_amount = calculate_kelly_bet(win_prob, BANKROLL, MAX_RISK_PER_TRADE)
         current_price = df_clean['close'].iloc[-1]
         
+        # Direction logic
         if edge >= MIN_EDGE and win_prob > 0.55:
-            action = "BUY YES" if win_prob > 0.5 else "BUY NO"
-            is_signal = True
+            if win_prob > 0.5:
+                direction = "UP"
+                action = "BUY YES"
+                is_signal = True
+            else:
+                direction = "DOWN"
+                action = "BUY NO"
+                is_signal = True
         else:
+            direction = "WAIT"
             action = "SKIP"
             is_signal = False
+        
+        # Confidence level for display
+        if win_prob >= 0.65:
+            confidence_label = "🔴 High"
+        elif win_prob >= 0.55:
+            confidence_label = "🟡 Medium"
+        else:
+            confidence_label = "⚪ Low"
         
         # Get coin info
         name, symbol, color = COIN_NAMES.get(coin, (coin_name, '', '#ffffff'))
@@ -385,7 +417,9 @@ for idx, coin in enumerate(COINS):
             'Change_24h': paprika_data.get('percent_change_24h', 0),
             'Bet_Size': bet_amount,
             'Bet_Size_Str': f"${bet_amount:.2f}" if bet_amount > 0 else "$0.00",
+            'Direction': direction,
             'Action': action,
+            'Confidence_Label': confidence_label,
             'Action_Color': color,
             'Is_Signal': is_signal
         }
@@ -421,24 +455,25 @@ with fg_col3:
 
 st.divider()
 
-# --- Metric Cards ---
+# --- Metric Cards with Direction Signals ---
 st.markdown("### 📊 Market Overview")
 m_cols = st.columns(6)
 
 for i, result in enumerate(all_results):
     if i < 6:
         with m_cols[i]:
-            color = result['Action_Color']
             change_color = '#00b894' if result['Change_24h'] > 0 else '#ff6b6b' if result['Change_24h'] < 0 else '#fdcb6e'
             
-            # Action label with proper styling
-            action = result['Action']
-            if 'BUY YES' in action:
-                action_class = 'action-buy-yes'
-            elif 'BUY NO' in action:
-                action_class = 'action-buy-no'
+            # Direction CSS class
+            if result['Direction'] == "UP":
+                dir_class = "direction-up"
+                dir_emoji = "⬆️"
+            elif result['Direction'] == "DOWN":
+                dir_class = "direction-down"
+                dir_emoji = "⬇️"
             else:
-                action_class = 'action-skip'
+                dir_class = "direction-wait"
+                dir_emoji = "⏳"
             
             st.markdown(f"""
             <div class="metric-card">
@@ -448,10 +483,13 @@ for i, result in enumerate(all_results):
                     {result['Change_24h']:+.1f}%
                 </div>
                 <div>
-                    <span class="{action_class}">{action}</span>
+                    <span class="{dir_class}">{dir_emoji} {result['Direction']}</span>
                 </div>
                 <div class="coin-stats">
                     Win: {result['Win_Prob_Str']} | Edge: {result['Edge_Str']}
+                </div>
+                <div class="coin-stats">
+                    {result['Confidence_Label']} Confidence
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -466,25 +504,22 @@ if all_results:
         'Coin': r['Coin'],
         'Name': r['Name'],
         'Price': r['Price_Str'],
+        'Direction': r['Direction'],
         'Win Prob': r['Win_Prob_Str'],
         'Edge': r['Edge_Str'],
         '24h Change': f"{r['Change_24h']:+.1f}%",
         '15m Change': f"{r['Change_15m']:+.1f}%",
         'Bet': r['Bet_Size_Str'],
-        'Action': r['Action']
+        'Confidence': r['Confidence_Label']
     } for r in all_results])
     
-    # Color code the dataframe using .map (newer pandas) or .applymap (older)
+    # Color code the dataframe
     try:
-        # Try the new .map method (pandas 2.1+)
         styled_df = df_display.style.map(color_change, subset=['24h Change', '15m Change'])
         styled_df = styled_df.map(color_confidence, subset=['Win Prob'])
-        styled_df = styled_df.map(color_action, subset=['Action'])
     except AttributeError:
-        # Fallback to .applymap for older pandas
         styled_df = df_display.style.applymap(color_change, subset=['24h Change', '15m Change'])
         styled_df = styled_df.applymap(color_confidence, subset=['Win Prob'])
-        styled_df = styled_df.applymap(color_action, subset=['Action'])
     
     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 else:
@@ -500,11 +535,19 @@ if best_bets:
     for i, bet in enumerate(best_bets[:6]):
         col = cols[i % 3]
         with col:
+            # Direction emoji
+            if bet['Direction'] == "UP":
+                dir_emoji = "⬆️"
+                dir_color = "#00b894"
+            else:
+                dir_emoji = "⬇️"
+                dir_color = "#ff6b6b"
+            
             st.markdown(f"""
             <div class="best-bet">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-size: 1.2rem;">{bet['Coin']}</span>
-                    <span style="font-size: 1.5rem;">{bet['Action']}</span>
+                    <span style="font-size: 1.5rem; color: {dir_color};">{dir_emoji} {bet['Direction']}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
                     <span>Win: {bet['Win_Prob_Str']}</span>
@@ -515,12 +558,15 @@ if best_bets:
                     <span>24h: {bet['Change_24h']:+.1f}%</span>
                     <span>15m: {bet['Change_15m']:+.1f}%</span>
                 </div>
+                <div style="font-size: 0.8rem; opacity: 0.7; margin-top: 0.3rem;">
+                    {bet['Confidence_Label']} Confidence
+                </div>
             </div>
             """, unsafe_allow_html=True)
 else:
     st.markdown("""
     <div class="skip-bet">
-        ⏳ No bets meet the minimum edge threshold. Waiting for better signals...
+        ⏳ No directional signals meet the minimum edge threshold. Waiting for better opportunities...
     </div>
     """, unsafe_allow_html=True)
 
@@ -534,12 +580,10 @@ if selected_coin:
     try:
         df_chart = fetch_yahoo_data(selected_coin)
         if not df_chart.empty:
-            # Create subplot with price and volume
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
                                vertical_spacing=0.05, 
                                row_heights=[0.7, 0.3])
             
-            # Price line
             fig.add_trace(go.Scatter(
                 x=df_chart['time'],
                 y=df_chart['close'],
@@ -547,7 +591,6 @@ if selected_coin:
                 line=dict(color='#667eea', width=2)
             ), row=1, col=1)
             
-            # Volume bars
             fig.add_trace(go.Bar(
                 x=df_chart['time'],
                 y=df_chart['volume'],
@@ -592,11 +635,13 @@ with st.sidebar:
     
     st.divider()
     
-    st.markdown("### 🎯 Strategy")
+    st.markdown("### 🎯 Directional Strategy")
     st.markdown("""
+    **⬆️ UP:** Model predicts price will rise  
+    **⬇️ DOWN:** Model predicts price will fall  
+    **⏳ WAIT:** No clear signal  
     **Signal:** Win Prob > 55% + Edge > 5%  
     **Sizing:** Kelly Criterion (capped at 2%)  
-    **Exit:** Stop loss at 2%  
     """)
     
     st.divider()
