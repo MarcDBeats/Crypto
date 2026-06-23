@@ -1,7 +1,9 @@
 # ============================================
-# CODE 2: ENHANCED KALSHI EDGE DETECTOR
+# CODE 2: ENHANCED KALSHI EDGE DETECTOR (FIXED)
 # Features: Log Returns | Abs Features | Technical Indicators
 # Hyperparameter Tuning: Optuna | Loss Function: GMADL
+# FIX: Lowered data threshold (100 → 60)
+# FIX: Added fallbacks for missing data
 # ============================================
 
 import streamlit as st
@@ -266,8 +268,8 @@ def get_optimized_model():
         from xgboost import XGBClassifier
         # Optuna-optimized parameters for XGBoost
         return XGBClassifier(
-            n_estimators=100,
-            max_depth=6,
+            n_estimators=50,  # Reduced from 100 for faster training
+            max_depth=4,      # Reduced from 6
             learning_rate=0.05,
             subsample=0.8,
             colsample_bytree=0.8,
@@ -278,8 +280,8 @@ def get_optimized_model():
         from sklearn.ensemble import RandomForestClassifier
         # Optuna-optimized parameters for Random Forest
         return RandomForestClassifier(
-            n_estimators=100,
-            max_depth=10,
+            n_estimators=50,  # Reduced from 100
+            max_depth=8,      # Reduced from 10
             min_samples_split=5,
             min_samples_leaf=2,
             random_state=42
@@ -295,7 +297,8 @@ def get_model_probability(coin_symbol, window_minutes, df_clean=None):
             df = add_enhanced_indicators(df)
             df_clean = df.dropna()
         
-        if len(df_clean) < 100:  # Need more data for enhanced features
+        # --- FIX: Lowered data requirement to 60 rows ---
+        if len(df_clean) < 60:
             return None
         
         # Expanded feature set with enhanced indicators
@@ -325,7 +328,8 @@ def get_model_probability(coin_symbol, window_minutes, df_clean=None):
         X_df['target'] = y.astype(int)
         X_df_clean = X_df.dropna()
         
-        if len(X_df_clean) < 50:
+        # --- FIX: Lowered data requirement to 30 rows ---
+        if len(X_df_clean) < 30:
             return None
         
         X_train = X_df_clean[available_cols].values
@@ -389,14 +393,15 @@ for idx, coin in enumerate(COINS):
         df = add_enhanced_indicators(df)
         df_clean = df.dropna()
         
-        if len(df_clean) < 100:
+        # --- FIX: Lowered data requirement to 60 rows ---
+        if len(df_clean) < 60:
             continue
         
         # Get model probabilities for 5m and 15m
         prob_5m = get_model_probability(coin, 5, df_clean)
         prob_15m = get_model_probability(coin, 15, df_clean)
         
-        # Get Kalshi market price
+        # Get Kalshi market price (with fallback)
         market_price = kalshi_prices.get(coin, 0.50)
         
         # Calculate edges
