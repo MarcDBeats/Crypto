@@ -1,5 +1,6 @@
 # ============================================
 # CRYPTO DASHBOARD - 5m & 15m PREDICTIONS
+# Full Coin Names Displayed
 # ============================================
 
 import streamlit as st
@@ -38,10 +39,21 @@ st.markdown("""
         border-radius: 0.5rem;
         border: 1px solid #3d3d5c;
         text-align: center;
+        min-height: 180px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    .metric-card .coin-name {
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: #ccc;
+        margin-bottom: 0.2rem;
     }
     .metric-card .coin-symbol {
-        font-size: 1.5rem;
-        font-weight: 600;
+        font-size: 0.7rem;
+        color: #888;
+        margin-bottom: 0.3rem;
     }
     .metric-card .coin-price {
         font-size: 1.2rem;
@@ -52,7 +64,7 @@ st.markdown("""
         font-size: 0.9rem;
     }
     .metric-card .coin-direction {
-        font-size: 1rem;
+        font-size: 0.85rem;
         margin-top: 0.3rem;
         padding: 0.15rem 0.4rem;
         border-radius: 0.3rem;
@@ -139,13 +151,14 @@ MIN_EDGE = 0.05
 
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
-COIN_NAMES = {
-    'BTC-USD': ('Bitcoin', '₿', '#f7931a'),
-    'ETH-USD': ('Ethereum', '⟠', '#627eea'),
-    'SOL-USD': ('Solana', '◎', '#9945ff'),
-    'BNB-USD': ('BNB', '◆', '#f3ba2f'),
-    'XRP-USD': ('XRP', '✕', '#00aae4'),
-    'DOGE-USD': ('Dogecoin', 'Ð', '#c2a633')
+# Coin metadata with full names and symbols
+COIN_METADATA = {
+    'BTC-USD': {'name': 'Bitcoin', 'symbol': 'BTC', 'color': '#f7931a'},
+    'ETH-USD': {'name': 'Ethereum', 'symbol': 'ETH', 'color': '#627eea'},
+    'SOL-USD': {'name': 'Solana', 'symbol': 'SOL', 'color': '#9945ff'},
+    'BNB-USD': {'name': 'BNB', 'symbol': 'BNB', 'color': '#f3ba2f'},
+    'XRP-USD': {'name': 'XRP', 'symbol': 'XRP', 'color': '#00aae4'},
+    'DOGE-USD': {'name': 'Dogecoin', 'symbol': 'DOGE', 'color': '#c2a633'}
 }
 
 # --- Data Fetching ---
@@ -393,7 +406,7 @@ for idx, coin in enumerate(COINS):
     paprika_data = fetch_coinpaprika_data(paprika_map[coin])
     coin_name = coin.replace('-USD', '')
     current_price = df_clean['close'].iloc[-1]
-    name, symbol, color = COIN_NAMES.get(coin, (coin_name, '', '#ffffff'))
+    metadata = COIN_METADATA.get(coin, {'name': coin_name, 'symbol': coin_name, 'color': '#ffffff'})
     
     # Get 5-minute prediction
     pred_5m = get_prediction_for_window(coin, 5, df_clean)
@@ -413,8 +426,9 @@ for idx, coin in enumerate(COINS):
         change_15m = 0
     
     result = {
-        'Coin': symbol,
-        'Name': name,
+        'Name': metadata['name'],
+        'Symbol': metadata['symbol'],
+        'Full_Display': f"{metadata['name']} ({metadata['symbol']})",
         'Price': current_price,
         'Price_Str': f"${current_price:.2f}",
         'Change_5m': change_5m,
@@ -430,7 +444,7 @@ for idx, coin in enumerate(COINS):
         '15m_Edge': f"{pred_15m['edge']:.0%}" if pred_15m else '—',
         '15m_Action': pred_15m['action'] if pred_15m else 'SKIP',
         '15m_Is_Signal': pred_15m['is_signal'] if pred_15m else False,
-        'Action_Color': color
+        'Color': metadata['color']
     }
     all_results.append(result)
     
@@ -463,7 +477,7 @@ with fg_col3:
 
 st.divider()
 
-# --- Metric Cards ---
+# --- Metric Cards with Full Names ---
 st.markdown("### 📊 Market Overview")
 m_cols = st.columns(6)
 
@@ -474,40 +488,41 @@ for i, result in enumerate(all_results):
             
             # 5m direction
             if result['5m_Direction'] == "UP":
-                dir_5m = "⬆️"
+                dir_5m = "⬆️ UP"
                 dir_class_5m = "direction-up"
             elif result['5m_Direction'] == "DOWN":
-                dir_5m = "⬇️"
+                dir_5m = "⬇️ DOWN"
                 dir_class_5m = "direction-down"
             else:
-                dir_5m = "⏳"
+                dir_5m = "⏳ WAIT"
                 dir_class_5m = "direction-wait"
             
             # 15m direction
             if result['15m_Direction'] == "UP":
-                dir_15m = "⬆️"
+                dir_15m = "⬆️ UP"
                 dir_class_15m = "direction-up"
             elif result['15m_Direction'] == "DOWN":
-                dir_15m = "⬇️"
+                dir_15m = "⬇️ DOWN"
                 dir_class_15m = "direction-down"
             else:
-                dir_15m = "⏳"
+                dir_15m = "⏳ WAIT"
                 dir_class_15m = "direction-wait"
             
             st.markdown(f"""
             <div class="metric-card">
-                <div class="coin-symbol">{result['Coin']}</div>
+                <div class="coin-name">{result['Name']}</div>
+                <div class="coin-symbol">{result['Symbol']}</div>
                 <div class="coin-price">{result['Price_Str']}</div>
                 <div class="coin-change" style="color: {change_color};">
-                    {result['Change_24h']:+.1f}%
+                    24h: {result['Change_24h']:+.1f}%
                 </div>
                 <div style="display: flex; justify-content: center; gap: 0.5rem; margin-top: 0.3rem;">
-                    <span style="font-size: 0.7rem; color: #888;">5m</span>
-                    <span class="{dir_class_5m}">{dir_5m} {result['5m_Direction']}</span>
+                    <span style="font-size: 0.7rem; color: #888;">5m:</span>
+                    <span class="{dir_class_5m}">{dir_5m}</span>
                 </div>
                 <div style="display: flex; justify-content: center; gap: 0.5rem;">
-                    <span style="font-size: 0.7rem; color: #888;">15m</span>
-                    <span class="{dir_class_15m}">{dir_15m} {result['15m_Direction']}</span>
+                    <span style="font-size: 0.7rem; color: #888;">15m:</span>
+                    <span class="{dir_class_15m}">{dir_15m}</span>
                 </div>
                 <div class="coin-stats">
                     5m: {result['5m_Win_Prob']} | 15m: {result['15m_Win_Prob']}
@@ -522,8 +537,8 @@ st.markdown("### 📈 Detailed Predictions")
 
 if all_results:
     df_display = pd.DataFrame([{
-        'Coin': r['Coin'],
-        'Name': r['Name'],
+        'Coin': r['Name'],
+        'Symbol': r['Symbol'],
         'Price': r['Price_Str'],
         '5m Direction': r['5m_Direction'],
         '5m Win': r['5m_Win_Prob'],
@@ -550,13 +565,13 @@ else:
 
 st.divider()
 
-# --- Best Bets Section ---
+# --- Best Bets Section with Full Names ---
 st.markdown("### ⭐ Best Bets")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("5-Minute Best Bets")
+    st.subheader("📈 5-Minute Best Bets")
     if best_bets_5m:
         for bet in best_bets_5m[:3]:
             dir_emoji = "⬆️" if bet['5m_Direction'] == "UP" else "⬇️"
@@ -564,12 +579,13 @@ with col1:
             st.markdown(f"""
             <div class="best-bet">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 1.2rem;">{bet['Coin']}</span>
+                    <span style="font-size: 1.2rem;">{bet['Name']} ({bet['Symbol']})</span>
                     <span style="font-size: 1.5rem; color: {dir_color};">{dir_emoji} {bet['5m_Direction']}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
                     <span>Win: {bet['5m_Win_Prob']}</span>
                     <span>Edge: {bet['5m_Edge']}</span>
+                    <span>Price: {bet['Price_Str']}</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -577,7 +593,7 @@ with col1:
         st.markdown('<div class="skip-bet">⏳ No 5-minute signals</div>', unsafe_allow_html=True)
 
 with col2:
-    st.subheader("15-Minute Best Bets")
+    st.subheader("⏰ 15-Minute Best Bets")
     if best_bets_15m:
         for bet in best_bets_15m[:3]:
             dir_emoji = "⬆️" if bet['15m_Direction'] == "UP" else "⬇️"
@@ -585,12 +601,13 @@ with col2:
             st.markdown(f"""
             <div class="best-bet" style="background: linear-gradient(135deg, #fdcb6e 0%, #f39c12 100%); color: #1e1e2f;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 1.2rem;">{bet['Coin']}</span>
+                    <span style="font-size: 1.2rem;">{bet['Name']} ({bet['Symbol']})</span>
                     <span style="font-size: 1.5rem; color: {dir_color};">{dir_emoji} {bet['15m_Direction']}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
                     <span>Win: {bet['15m_Win_Prob']}</span>
                     <span>Edge: {bet['15m_Edge']}</span>
+                    <span>Price: {bet['Price_Str']}</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -602,7 +619,13 @@ st.divider()
 # --- Price Charts ---
 st.markdown("### 📉 Price Charts")
 
-selected_coin = st.selectbox("Select a coin to view chart:", COINS)
+# Create a list of display names for the dropdown
+coin_display_names = [f"{COIN_METADATA[coin]['name']} ({COIN_METADATA[coin]['symbol']})" for coin in COINS]
+coin_display_map = {f"{COIN_METADATA[coin]['name']} ({COIN_METADATA[coin]['symbol']})": coin for coin in COINS}
+
+selected_display = st.selectbox("Select a coin to view chart:", coin_display_names)
+selected_coin = coin_display_map[selected_display]
+
 if selected_coin:
     try:
         df_chart = fetch_yahoo_data(selected_coin)
