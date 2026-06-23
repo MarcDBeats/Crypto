@@ -1,6 +1,7 @@
 # ============================================
-# CRYPTO DASHBOARD - 5m & 15m PREDICTIONS
-# Full Coin Names Displayed
+# KALSHI EDGE DETECTOR
+# Compares model probability vs. Kalshi price
+# Tells you whether to bet YES or NO
 # ============================================
 
 import streamlit as st
@@ -16,7 +17,7 @@ warnings.filterwarnings('ignore')
 
 # --- Page Config ---
 st.set_page_config(
-    page_title="Crypto Predictor Pro",
+    page_title="Kalshi Edge Detector",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -39,7 +40,7 @@ st.markdown("""
         border-radius: 0.5rem;
         border: 1px solid #3d3d5c;
         text-align: center;
-        min-height: 180px;
+        min-height: 200px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -48,45 +49,30 @@ st.markdown("""
         font-size: 0.9rem;
         font-weight: 700;
         color: #ccc;
-        margin-bottom: 0.2rem;
-    }
-    .metric-card .coin-symbol {
-        font-size: 0.7rem;
-        color: #888;
-        margin-bottom: 0.3rem;
     }
     .metric-card .coin-price {
         font-size: 1.2rem;
         font-weight: 600;
         margin: 0.3rem 0;
     }
-    .metric-card .coin-change {
-        font-size: 0.9rem;
-    }
-    .metric-card .coin-direction {
-        font-size: 0.85rem;
-        margin-top: 0.3rem;
-        padding: 0.15rem 0.4rem;
-        border-radius: 0.3rem;
-        display: inline-block;
+    .metric-card .edge-display {
+        font-size: 1.3rem;
         font-weight: 700;
+        margin: 0.3rem 0;
     }
     .metric-card .coin-stats {
         font-size: 0.65rem;
         color: #888;
         margin-top: 0.2rem;
     }
-    .direction-up {
-        background: #00b89433;
+    .edge-positive {
         color: #00b894;
     }
-    .direction-down {
-        background: #ff6b6b33;
+    .edge-negative {
         color: #ff6b6b;
     }
-    .direction-wait {
-        background: #636e7233;
-        color: #b2bec3;
+    .edge-neutral {
+        color: #fdcb6e;
     }
     .best-bet {
         background: linear-gradient(135deg, #00b894 0%, #00cec9 100%);
@@ -95,11 +81,11 @@ st.markdown("""
         color: white;
         font-weight: 600;
     }
-    .best-bet-medium {
-        background: linear-gradient(135deg, #fdcb6e 0%, #f39c12 100%);
+    .best-bet-no {
+        background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
         padding: 1rem;
         border-radius: 0.5rem;
-        color: #1e1e2f;
+        color: white;
         font-weight: 600;
     }
     .skip-bet {
@@ -113,21 +99,19 @@ st.markdown("""
         border-radius: 0.5rem;
         overflow: hidden;
     }
-    .badge-up {
+    .badge-yes {
         background: #00b89433;
         color: #00b894;
         padding: 0.15rem 0.5rem;
         border-radius: 0.3rem;
         font-weight: 700;
-        font-size: 0.8rem;
     }
-    .badge-down {
+    .badge-no {
         background: #ff6b6b33;
         color: #ff6b6b;
         padding: 0.15rem 0.5rem;
         border-radius: 0.3rem;
         font-weight: 700;
-        font-size: 0.8rem;
     }
     .badge-wait {
         background: #636e7233;
@@ -135,23 +119,32 @@ st.markdown("""
         padding: 0.15rem 0.5rem;
         border-radius: 0.3rem;
         font-weight: 600;
-        font-size: 0.8rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
-st.markdown('<div class="main-header">📊 Crypto Predictor Pro</div>', unsafe_allow_html=True)
-st.caption(f"⚡ 5m & 15m Predictions • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.markdown('<div class="main-header">📊 Kalshi Edge Detector</div>', unsafe_allow_html=True)
+st.caption(f"⚡ Model Probability vs. Kalshi Price • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
 BANKROLL = 100.00
 MAX_RISK_PER_TRADE = 0.02
-MIN_EDGE = 0.05
+MIN_EDGE = 0.05  # Minimum 5% edge before trading
 
+# --- Coins ---
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
-# Coin metadata with full names and symbols
+# Kalshi ticker mapping (adjust these to match actual Kalshi tickers)
+KALSHI_TICKERS = {
+    'BTC-USD': 'KXBT',  # Example — verify on Kalshi
+    'ETH-USD': 'KXETH',
+    'SOL-USD': 'KXSOL',
+    'BNB-USD': 'KXBNB',
+    'XRP-USD': 'KXXRP',
+    'DOGE-USD': 'KXDOGE'
+}
+
 COIN_METADATA = {
     'BTC-USD': {'name': 'Bitcoin', 'symbol': 'BTC', 'color': '#f7931a'},
     'ETH-USD': {'name': 'Ethereum', 'symbol': 'ETH', 'color': '#627eea'},
@@ -162,7 +155,7 @@ COIN_METADATA = {
 }
 
 # --- Data Fetching ---
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def fetch_yahoo_data(symbol):
     try:
         ticker = yf.Ticker(symbol)
@@ -182,24 +175,32 @@ def fetch_yahoo_data(symbol):
     except:
         return pd.DataFrame()
 
-@st.cache_data(ttl=300)
-def fetch_coinpaprika_data(coin_id):
+@st.cache_data(ttl=30)
+def fetch_kalshi_price(ticker):
+    """
+    Fetch current Kalshi market price (implied probability).
+    This returns the price of the YES contract.
+    """
     try:
-        url = f"https://api.coinpaprika.com/v1/tickers/{coin_id}"
+        url = f"https://external-api.kalshi.com/trade-api/v2/markets/{ticker}"
         response = requests.get(url, timeout=5)
         data = response.json()
-        quotes = data.get('quotes', {}).get('USD', {})
-        return {
-            'price': quotes.get('price', 0),
-            'percent_change_5m': quotes.get('percent_change_5m', 0),
-            'percent_change_15m': quotes.get('percent_change_15m', 0),
-            'percent_change_24h': quotes.get('percent_change_24h', 0),
-            'volume_24h': quotes.get('volume_24h', 0),
-            'market_cap': quotes.get('market_cap', 0)
-        }
+        
+        market = data.get('market', {})
+        yes_bid = market.get('yes_bid', 0)
+        yes_ask = market.get('yes_ask', 0)
+        
+        # Use mid-price
+        if yes_bid > 0 and yes_ask > 0:
+            return (yes_bid + yes_ask) / 2
+        elif yes_bid > 0:
+            return yes_bid
+        elif yes_ask > 0:
+            return yes_ask
+        else:
+            return None
     except:
-        return {'price': 0, 'percent_change_5m': 0, 'percent_change_15m': 0, 
-                'percent_change_24h': 0, 'volume_24h': 0, 'market_cap': 0}
+        return None
 
 @st.cache_data(ttl=3600)
 def fetch_fear_greed_index():
@@ -258,20 +259,8 @@ def get_model():
         from sklearn.ensemble import RandomForestClassifier
         return RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
 
-def calculate_kelly_bet(win_prob, bankroll, max_risk_pct=0.02):
-    odds = 1.0
-    p = win_prob
-    q = 1 - p
-    if p <= 0.5:
-        return 0
-    kelly_fraction = (p * odds - q) / odds
-    kelly_fraction = min(kelly_fraction, max_risk_pct)
-    if kelly_fraction < 0.01:
-        return 0
-    return kelly_fraction * bankroll
-
-def get_prediction_for_window(coin_symbol, window_minutes, df_clean=None):
-    """Get prediction for a specific time window (5m or 15m)"""
+def get_model_probability(coin_symbol, window_minutes, df_clean=None):
+    """Get the model's probability estimate for a given window."""
     try:
         if df_clean is None:
             df = fetch_yahoo_data(coin_symbol)
@@ -308,150 +297,131 @@ def get_prediction_for_window(coin_symbol, window_minutes, df_clean=None):
         last_row = df_clean[available_cols].iloc[-1].values.reshape(1, -1)
         win_prob = model.predict_proba(last_row)[0][1]
         
-        current_price = df_clean['close'].iloc[-1]
-        edge = win_prob - 0.50
-        
-        if edge >= MIN_EDGE and win_prob > 0.55:
-            if win_prob > 0.5:
-                direction = "UP"
-                action = "BUY YES"
-                is_signal = True
-            else:
-                direction = "DOWN"
-                action = "BUY NO"
-                is_signal = True
-        else:
-            direction = "WAIT"
-            action = "SKIP"
-            is_signal = False
-        
-        return {
-            'win_prob': win_prob,
-            'edge': edge,
-            'direction': direction,
-            'action': action,
-            'is_signal': is_signal
-        }
+        return win_prob
     except:
         return None
 
-# --- Color Helpers ---
-def color_change(val):
-    if isinstance(val, str):
-        val = val.replace('%', '')
-    try:
-        val = float(val)
-        if val > 0:
-            return 'color: #00b894'
-        elif val < 0:
-            return 'color: #ff6b6b'
-        else:
-            return 'color: #fdcb6e'
-    except:
-        return ''
-
-def color_confidence(val):
-    if isinstance(val, str):
-        val = val.replace('%', '')
-    try:
-        val = float(val)
-        if val >= 65:
-            return 'color: #00b894; font-weight: bold'
-        elif val >= 55:
-            return 'color: #fdcb6e; font-weight: bold'
-        else:
-            return 'color: #ff6b6b'
-    except:
-        return ''
-
-# --- Main Prediction Loop ---
+# --- Main Loop ---
 all_results = []
-best_bets_5m = []
-best_bets_15m = []
-
-paprika_map = {
-    'BTC-USD': 'btc-bitcoin',
-    'ETH-USD': 'eth-ethereum',
-    'SOL-USD': 'sol-solana',
-    'BNB-USD': 'bnb-binance-coin',
-    'XRP-USD': 'xrp-xrp',
-    'DOGE-USD': 'doge-dogecoin'
-}
+best_bets = []
 
 fear_greed = fetch_fear_greed_index()
+
+# Fetch Kalshi prices
+kalshi_prices = {}
+for coin in COINS:
+    ticker = KALSHI_TICKERS.get(coin)
+    if ticker:
+        price = fetch_kalshi_price(ticker)
+        if price:
+            kalshi_prices[coin] = price
 
 progress_bar = st.progress(0)
 status_text = st.empty()
 
-# First pass: fetch all data once
-coin_data = {}
 for idx, coin in enumerate(COINS):
-    status_text.text(f"🔄 Fetching data for {coin}...")
-    df = fetch_yahoo_data(coin)
-    if not df.empty:
+    status_text.text(f"🔄 Analyzing {coin}...")
+    
+    try:
+        df = fetch_yahoo_data(coin)
+        if df.empty:
+            continue
+        
         df = add_advanced_indicators(df)
         df_clean = df.dropna()
-        if len(df_clean) >= 50:
-            coin_data[coin] = df_clean
-    progress_bar.progress((idx + 1) / len(COINS))
-
-# Second pass: generate predictions for 5m and 15m
-status_text.text("🔄 Generating predictions...")
-
-for idx, coin in enumerate(COINS):
-    if coin not in coin_data:
-        continue
-    
-    df_clean = coin_data[coin]
-    paprika_data = fetch_coinpaprika_data(paprika_map[coin])
-    coin_name = coin.replace('-USD', '')
-    current_price = df_clean['close'].iloc[-1]
-    metadata = COIN_METADATA.get(coin, {'name': coin_name, 'symbol': coin_name, 'color': '#ffffff'})
-    
-    # Get 5-minute prediction
-    pred_5m = get_prediction_for_window(coin, 5, df_clean)
-    
-    # Get 15-minute prediction
-    pred_15m = get_prediction_for_window(coin, 15, df_clean)
-    
-    # Calculate actual price changes
-    if len(df_clean) > 5:
-        change_5m = ((df_clean['close'].iloc[-1] - df_clean['close'].iloc[-6]) / df_clean['close'].iloc[-6]) * 100
-    else:
-        change_5m = 0
-    
-    if len(df_clean) > 15:
-        change_15m = ((df_clean['close'].iloc[-1] - df_clean['close'].iloc[-16]) / df_clean['close'].iloc[-16]) * 100
-    else:
-        change_15m = 0
-    
-    result = {
-        'Name': metadata['name'],
-        'Symbol': metadata['symbol'],
-        'Full_Display': f"{metadata['name']} ({metadata['symbol']})",
-        'Price': current_price,
-        'Price_Str': f"${current_price:.2f}",
-        'Change_5m': change_5m,
-        'Change_15m': change_15m,
-        'Change_24h': paprika_data.get('percent_change_24h', 0),
-        '5m_Direction': pred_5m['direction'] if pred_5m else 'WAIT',
-        '5m_Win_Prob': f"{pred_5m['win_prob']:.0%}" if pred_5m else '—',
-        '5m_Edge': f"{pred_5m['edge']:.0%}" if pred_5m else '—',
-        '5m_Action': pred_5m['action'] if pred_5m else 'SKIP',
-        '5m_Is_Signal': pred_5m['is_signal'] if pred_5m else False,
-        '15m_Direction': pred_15m['direction'] if pred_15m else 'WAIT',
-        '15m_Win_Prob': f"{pred_15m['win_prob']:.0%}" if pred_15m else '—',
-        '15m_Edge': f"{pred_15m['edge']:.0%}" if pred_15m else '—',
-        '15m_Action': pred_15m['action'] if pred_15m else 'SKIP',
-        '15m_Is_Signal': pred_15m['is_signal'] if pred_15m else False,
-        'Color': metadata['color']
-    }
-    all_results.append(result)
-    
-    if pred_5m and pred_5m['is_signal']:
-        best_bets_5m.append(result)
-    if pred_15m and pred_15m['is_signal']:
-        best_bets_15m.append(result)
+        
+        if len(df_clean) < 50:
+            continue
+        
+        # Get model probabilities
+        prob_5m = get_model_probability(coin, 5, df_clean)
+        prob_15m = get_model_probability(coin, 15, df_clean)
+        
+        # Get Kalshi market price
+        market_price = kalshi_prices.get(coin, 0.50)
+        
+        # Calculate edge
+        edge_5m = prob_5m - market_price if prob_5m else 0
+        edge_15m = prob_15m - market_price if prob_15m else 0
+        
+        # --- DECISION LOGIC ---
+        # For YES: if model > market price by MIN_EDGE
+        # For NO: if model < market price by MIN_EDGE
+        
+        # 5-Minute Decision
+        if prob_5m and edge_5m >= MIN_EDGE:
+            decision_5m = "BUY YES"
+            direction_5m = "YES"
+            is_signal_5m = True
+        elif prob_5m and edge_5m <= -MIN_EDGE:
+            decision_5m = "BUY NO"
+            direction_5m = "NO"
+            is_signal_5m = True
+        else:
+            decision_5m = "SKIP"
+            direction_5m = "WAIT"
+            is_signal_5m = False
+        
+        # 15-Minute Decision
+        if prob_15m and edge_15m >= MIN_EDGE:
+            decision_15m = "BUY YES"
+            direction_15m = "YES"
+            is_signal_15m = True
+        elif prob_15m and edge_15m <= -MIN_EDGE:
+            decision_15m = "BUY NO"
+            direction_15m = "NO"
+            is_signal_15m = True
+        else:
+            decision_15m = "SKIP"
+            direction_15m = "WAIT"
+            is_signal_15m = False
+        
+        # Calculate actual price changes
+        if len(df_clean) > 5:
+            change_5m = ((df_clean['close'].iloc[-1] - df_clean['close'].iloc[-6]) / df_clean['close'].iloc[-6]) * 100
+        else:
+            change_5m = 0
+        
+        if len(df_clean) > 15:
+            change_15m = ((df_clean['close'].iloc[-1] - df_clean['close'].iloc[-16]) / df_clean['close'].iloc[-16]) * 100
+        else:
+            change_15m = 0
+        
+        metadata = COIN_METADATA.get(coin, {'name': coin.replace('-USD', ''), 'symbol': coin.replace('-USD', ''), 'color': '#ffffff'})
+        current_price = df_clean['close'].iloc[-1]
+        
+        result = {
+            'Name': metadata['name'],
+            'Symbol': metadata['symbol'],
+            'Price': current_price,
+            'Price_Str': f"${current_price:.2f}",
+            'Market_Price': market_price,
+            'Market_Price_Str': f"{market_price:.3f}",
+            'Prob_5m': prob_5m,
+            'Prob_5m_Str': f"{prob_5m:.0%}" if prob_5m else '—',
+            'Edge_5m': edge_5m,
+            'Edge_5m_Str': f"{edge_5m:.0%}" if prob_5m else '—',
+            'Decision_5m': decision_5m,
+            'Direction_5m': direction_5m,
+            'Is_Signal_5m': is_signal_5m,
+            'Prob_15m': prob_15m,
+            'Prob_15m_Str': f"{prob_15m:.0%}" if prob_15m else '—',
+            'Edge_15m': edge_15m,
+            'Edge_15m_Str': f"{edge_15m:.0%}" if prob_15m else '—',
+            'Decision_15m': decision_15m,
+            'Direction_15m': direction_15m,
+            'Is_Signal_15m': is_signal_15m,
+            'Change_5m': change_5m,
+            'Change_15m': change_15m,
+            'Color': metadata['color']
+        }
+        all_results.append(result)
+        
+        if is_signal_5m or is_signal_15m:
+            best_bets.append(result)
+            
+    except Exception as e:
+        pass
     
     progress_bar.progress((idx + 1) / len(COINS))
 
@@ -459,10 +429,10 @@ status_text.empty()
 progress_bar.empty()
 
 # ============================================
-# 📊 DASHBOARD LAYOUT
+# 📊 DASHBOARD DISPLAY
 # ============================================
 
-# --- Fear & Greed Index ---
+# --- Fear & Greed ---
 st.markdown("### 🧠 Market Sentiment")
 fg_col1, fg_col2, fg_col3, fg_col4, fg_col5 = st.columns([1, 1, 2, 1, 1])
 with fg_col3:
@@ -477,187 +447,136 @@ with fg_col3:
 
 st.divider()
 
-# --- Metric Cards with Full Names ---
+# --- Metric Cards ---
 st.markdown("### 📊 Market Overview")
 m_cols = st.columns(6)
 
 for i, result in enumerate(all_results):
     if i < 6:
         with m_cols[i]:
-            change_color = '#00b894' if result['Change_24h'] > 0 else '#ff6b6b' if result['Change_24h'] < 0 else '#fdcb6e'
-            
-            # 5m direction
-            if result['5m_Direction'] == "UP":
-                dir_5m = "⬆️ UP"
-                dir_class_5m = "direction-up"
-            elif result['5m_Direction'] == "DOWN":
-                dir_5m = "⬇️ DOWN"
-                dir_class_5m = "direction-down"
+            # Edge styling
+            edge = result['Edge_5m']
+            if edge >= MIN_EDGE:
+                edge_class = "edge-positive"
+                edge_display = f"🟢 +{edge:.0%}"
+            elif edge <= -MIN_EDGE:
+                edge_class = "edge-negative"
+                edge_display = f"🔴 {edge:.0%}"
             else:
-                dir_5m = "⏳ WAIT"
-                dir_class_5m = "direction-wait"
-            
-            # 15m direction
-            if result['15m_Direction'] == "UP":
-                dir_15m = "⬆️ UP"
-                dir_class_15m = "direction-up"
-            elif result['15m_Direction'] == "DOWN":
-                dir_15m = "⬇️ DOWN"
-                dir_class_15m = "direction-down"
-            else:
-                dir_15m = "⏳ WAIT"
-                dir_class_15m = "direction-wait"
+                edge_class = "edge-neutral"
+                edge_display = f"🟡 {edge:.0%}"
             
             st.markdown(f"""
             <div class="metric-card">
-                <div class="coin-name">{result['Name']}</div>
-                <div class="coin-symbol">{result['Symbol']}</div>
+                <div class="coin-name">{result['Name']} ({result['Symbol']})</div>
                 <div class="coin-price">{result['Price_Str']}</div>
-                <div class="coin-change" style="color: {change_color};">
-                    24h: {result['Change_24h']:+.1f}%
+                <div style="font-size: 0.8rem; color: #888;">
+                    Kalshi: {result['Market_Price_Str']}
+                </div>
+                <div class="edge-display {edge_class}">
+                    Edge: {edge_display}
                 </div>
                 <div style="display: flex; justify-content: center; gap: 0.5rem; margin-top: 0.3rem;">
                     <span style="font-size: 0.7rem; color: #888;">5m:</span>
-                    <span class="{dir_class_5m}">{dir_5m}</span>
-                </div>
-                <div style="display: flex; justify-content: center; gap: 0.5rem;">
-                    <span style="font-size: 0.7rem; color: #888;">15m:</span>
-                    <span class="{dir_class_15m}">{dir_15m}</span>
+                    <span style="font-size: 0.8rem; font-weight: 600; color: {'#00b894' if result['Direction_5m'] == 'YES' else '#ff6b6b' if result['Direction_5m'] == 'NO' else '#888'};">
+                        {result['Direction_5m']}
+                    </span>
+                    <span style="font-size: 0.7rem; color: #888;">| 15m:</span>
+                    <span style="font-size: 0.8rem; font-weight: 600; color: {'#00b894' if result['Direction_15m'] == 'YES' else '#ff6b6b' if result['Direction_15m'] == 'NO' else '#888'};">
+                        {result['Direction_15m']}
+                    </span>
                 </div>
                 <div class="coin-stats">
-                    5m: {result['5m_Win_Prob']} | 15m: {result['15m_Win_Prob']}
+                    Model 5m: {result['Prob_5m_Str']} | 15m: {result['Prob_15m_Str']}
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
 st.divider()
 
-# --- Detailed Predictions Table ---
-st.markdown("### 📈 Detailed Predictions")
+# --- Detailed Table ---
+st.markdown("### 📈 Detailed Edge Analysis")
 
 if all_results:
     df_display = pd.DataFrame([{
         'Coin': r['Name'],
         'Symbol': r['Symbol'],
         'Price': r['Price_Str'],
-        '5m Direction': r['5m_Direction'],
-        '5m Win': r['5m_Win_Prob'],
-        '5m Edge': r['5m_Edge'],
-        '15m Direction': r['15m_Direction'],
-        '15m Win': r['15m_Win_Prob'],
-        '15m Edge': r['15m_Edge'],
+        'Kalshi Price': r['Market_Price_Str'],
+        'Model 5m': r['Prob_5m_Str'],
+        'Edge 5m': r['Edge_5m_Str'],
+        'Decision 5m': r['Decision_5m'],
+        'Model 15m': r['Prob_15m_Str'],
+        'Edge 15m': r['Edge_15m_Str'],
+        'Decision 15m': r['Decision_15m'],
         '5m Change': f"{r['Change_5m']:+.1f}%",
-        '15m Change': f"{r['Change_15m']:+.1f}%",
-        '24h Change': f"{r['Change_24h']:+.1f}%"
+        '15m Change': f"{r['Change_15m']:+.1f}%"
     } for r in all_results])
     
-    # Color code
-    try:
-        styled_df = df_display.style.map(color_change, subset=['5m Change', '15m Change', '24h Change'])
-        styled_df = styled_df.map(color_confidence, subset=['5m Win', '15m Win'])
-    except AttributeError:
-        styled_df = df_display.style.applymap(color_change, subset=['5m Change', '15m Change', '24h Change'])
-        styled_df = styled_df.applymap(color_confidence, subset=['5m Win', '15m Win'])
-    
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
     st.warning("No predictions available.")
 
 st.divider()
 
-# --- Best Bets Section with Full Names ---
+# --- Best Bets ---
 st.markdown("### ⭐ Best Bets")
 
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("📈 5-Minute Best Bets")
-    if best_bets_5m:
-        for bet in best_bets_5m[:3]:
-            dir_emoji = "⬆️" if bet['5m_Direction'] == "UP" else "⬇️"
-            dir_color = "#00b894" if bet['5m_Direction'] == "UP" else "#ff6b6b"
+if best_bets:
+    cols = st.columns(min(len(best_bets), 3))
+    for i, bet in enumerate(best_bets[:6]):
+        col = cols[i % 3]
+        
+        # Determine which decision to show (prefer 5m over 15m)
+        if bet['Is_Signal_5m']:
+            decision = bet['Decision_5m']
+            direction = bet['Direction_5m']
+            prob = bet['Prob_5m_Str']
+            edge = bet['Edge_5m_Str']
+            timeframe = "5m"
+        elif bet['Is_Signal_15m']:
+            decision = bet['Decision_15m']
+            direction = bet['Direction_15m']
+            prob = bet['Prob_15m_Str']
+            edge = bet['Edge_15m_Str']
+            timeframe = "15m"
+        else:
+            continue
+        
+        # Color based on decision
+        if "YES" in decision:
+            card_class = "best-bet"
+            emoji = "🟢"
+        elif "NO" in decision:
+            card_class = "best-bet-no"
+            emoji = "🔴"
+        else:
+            continue
+        
+        with col:
             st.markdown(f"""
-            <div class="best-bet">
+            <div class="{card_class}">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-size: 1.2rem;">{bet['Name']} ({bet['Symbol']})</span>
-                    <span style="font-size: 1.5rem; color: {dir_color};">{dir_emoji} {bet['5m_Direction']}</span>
+                    <span style="font-size: 1.5rem;">{emoji} {direction}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
-                    <span>Win: {bet['5m_Win_Prob']}</span>
-                    <span>Edge: {bet['5m_Edge']}</span>
-                    <span>Price: {bet['Price_Str']}</span>
+                    <span>Decision: {decision}</span>
+                    <span>Edge: {edge}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
+                    <span>Time: {timeframe}</span>
+                    <span>Model: {prob}</span>
+                    <span>Kalshi: {bet['Market_Price_Str']}</span>
                 </div>
             </div>
             """, unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="skip-bet">⏳ No 5-minute signals</div>', unsafe_allow_html=True)
-
-with col2:
-    st.subheader("⏰ 15-Minute Best Bets")
-    if best_bets_15m:
-        for bet in best_bets_15m[:3]:
-            dir_emoji = "⬆️" if bet['15m_Direction'] == "UP" else "⬇️"
-            dir_color = "#00b894" if bet['15m_Direction'] == "UP" else "#ff6b6b"
-            st.markdown(f"""
-            <div class="best-bet" style="background: linear-gradient(135deg, #fdcb6e 0%, #f39c12 100%); color: #1e1e2f;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 1.2rem;">{bet['Name']} ({bet['Symbol']})</span>
-                    <span style="font-size: 1.5rem; color: {dir_color};">{dir_emoji} {bet['15m_Direction']}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
-                    <span>Win: {bet['15m_Win_Prob']}</span>
-                    <span>Edge: {bet['15m_Edge']}</span>
-                    <span>Price: {bet['Price_Str']}</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="skip-bet">⏳ No 15-minute signals</div>', unsafe_allow_html=True)
-
-st.divider()
-
-# --- Price Charts ---
-st.markdown("### 📉 Price Charts")
-
-# Create a list of display names for the dropdown
-coin_display_names = [f"{COIN_METADATA[coin]['name']} ({COIN_METADATA[coin]['symbol']})" for coin in COINS]
-coin_display_map = {f"{COIN_METADATA[coin]['name']} ({COIN_METADATA[coin]['symbol']})": coin for coin in COINS}
-
-selected_display = st.selectbox("Select a coin to view chart:", coin_display_names)
-selected_coin = coin_display_map[selected_display]
-
-if selected_coin:
-    try:
-        df_chart = fetch_yahoo_data(selected_coin)
-        if not df_chart.empty:
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                               vertical_spacing=0.05, 
-                               row_heights=[0.7, 0.3])
-            
-            fig.add_trace(go.Scatter(
-                x=df_chart['time'],
-                y=df_chart['close'],
-                name='Price',
-                line=dict(color='#667eea', width=2)
-            ), row=1, col=1)
-            
-            fig.add_trace(go.Bar(
-                x=df_chart['time'],
-                y=df_chart['volume'],
-                name='Volume',
-                marker_color='#2d2d44'
-            ), row=2, col=1)
-            
-            fig.update_layout(
-                height=400,
-                showlegend=False,
-                template='plotly_dark',
-                margin=dict(l=0, r=0, t=0, b=0)
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-    except:
-        st.warning("Chart data unavailable.")
+else:
+    st.markdown("""
+    <div class="skip-bet">
+        ⏳ No edges meet the minimum threshold. Waiting for better opportunities...
+    </div>
+    """, unsafe_allow_html=True)
 
 st.divider()
 
@@ -670,28 +589,30 @@ with st.sidebar:
     
     st.divider()
     
+    st.markdown("### 🎯 How It Works")
+    st.markdown("""
+    1. **Model Estimate** — Your ML model predicts probability of price increase
+    2. **Kalshi Price** — Market's implied probability (YES contract price)
+    3. **Edge Calculation** — Model - Kalshi Price
+    4. **Decision**:
+       - Edge > 5% → **BUY YES**
+       - Edge < -5% → **BUY NO**
+       - Otherwise → **SKIP**
+    """)
+    
+    st.divider()
+    
     st.markdown("### 📚 Data Sources")
     st.markdown("""
     ✅ Yahoo Finance (Prices)  
-    ✅ CoinPaprika (Market Data)  
-    ✅ Alternative.me (Fear & Greed)  
+    ✅ Kalshi API (Market Prices)  
     ✅ XGBoost/Random Forest (ML)  
     """)
     
     st.divider()
     
-    st.markdown("### 🎯 How to Read")
-    st.markdown("""
-    **5m Direction:** Prediction for next 5 minutes  
-    **15m Direction:** Prediction for next 15 minutes  
-    **Both use:** Win Prob > 55% + Edge > 5%  
-    **Sizing:** Kelly Criterion (capped at 2%)  
-    """)
-    
-    st.divider()
-    
     st.markdown("### 🔄 Auto-Refresh")
-    st.caption("Dashboard refreshes every 60 seconds")
+    st.caption("Refreshes every 30 seconds")
 
 # --- Footer ---
 st.divider()
