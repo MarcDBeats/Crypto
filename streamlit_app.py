@@ -1,16 +1,13 @@
 # ============================================
-# CODE 2: ENHANCED KALSHI EDGE DETECTOR (FIXED)
-# Features: Log Returns | Abs Features | Technical Indicators
-# Hyperparameter Tuning: Optuna | Loss Function: GMADL
-# FIX: Lowered data threshold (100 → 60)
-# FIX: Added fallbacks for missing data
+# CODE 2: ENHANCED KALSHI EDGE DETECTOR (FULLY FIXED)
+# Simplified feature set | Robust fallbacks | Working predictions
 # ============================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -106,7 +103,7 @@ st.markdown("""
 
 # --- Header ---
 st.markdown('<div class="main-header">📊 Enhanced Kalshi Edge Detector</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Log Returns • Abs Features • Advanced Indicators • Optuna Tuned • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
 BANKROLL = 100.00
@@ -115,7 +112,7 @@ MIN_EDGE = 0.05
 
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
-# Kalshi ticker mapping (adjust these to match actual Kalshi tickers)
+# Kalshi ticker mapping
 KALSHI_TICKERS = {
     'BTC-USD': 'KXBT',
     'ETH-USD': 'KXETH',
@@ -225,7 +222,7 @@ def add_enhanced_indicators(df):
     df['macd'] = df['close'].ewm(span=12).mean() - df['close'].ewm(span=26).mean()
     df['macd_signal'] = df['macd'].ewm(span=9).mean()
     df['macd_hist'] = df['macd'] - df['macd_signal']
-    df['macd_abs'] = df['macd_hist'].abs()  # Absolute feature for magnitude
+    df['macd_abs'] = df['macd_hist'].abs()
     
     # --- 6. BOLLINGER BANDS (Volatility) ---
     df['bb_middle'] = df['close'].rolling(20).mean()
@@ -233,10 +230,10 @@ def add_enhanced_indicators(df):
     df['bb_upper'] = df['bb_middle'] + 2 * bb_std
     df['bb_lower'] = df['bb_middle'] - 2 * bb_std
     df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']  # Normalized width
+    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
     
     # --- 7. VOLATILITY FEATURES ---
-    df['atr'] = (df['high'] - df['low']).rolling(14).mean()  # Average True Range
+    df['atr'] = (df['high'] - df['low']).rolling(14).mean()
     df['volatility'] = df['log_return'].rolling(10).std()
     df['volatility_abs'] = df['volatility'].abs()
     
@@ -261,32 +258,7 @@ def add_enhanced_indicators(df):
     
     return df
 
-# --- Optuna Hyperparameter Tuning (Simplified for Demo) ---
-def get_optimized_model():
-    """Return model with optimized hyperparameters"""
-    try:
-        from xgboost import XGBClassifier
-        # Optuna-optimized parameters for XGBoost
-        return XGBClassifier(
-            n_estimators=50,  # Reduced from 100 for faster training
-            max_depth=4,      # Reduced from 6
-            learning_rate=0.05,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            random_state=42,
-            use_label_encoder=False
-        )
-    except:
-        from sklearn.ensemble import RandomForestClassifier
-        # Optuna-optimized parameters for Random Forest
-        return RandomForestClassifier(
-            n_estimators=50,  # Reduced from 100
-            max_depth=8,      # Reduced from 10
-            min_samples_split=5,
-            min_samples_leaf=2,
-            random_state=42
-        )
-
+# --- GET MODEL PROBABILITY (FIXED) ---
 def get_model_probability(coin_symbol, window_minutes, df_clean=None):
     """Get the model's probability estimate using enhanced features"""
     try:
@@ -297,28 +269,22 @@ def get_model_probability(coin_symbol, window_minutes, df_clean=None):
             df = add_enhanced_indicators(df)
             df_clean = df.dropna()
         
-        # --- FIX: Lowered data requirement to 60 rows ---
         if len(df_clean) < 60:
             return None
         
-        # Expanded feature set with enhanced indicators
+        # --- SIMPLIFIED FEATURE SET (works with less data) ---
         feature_cols = [
             'close', 'volume', 
-            'log_return', 'log_return_5', 'log_return_10',
-            'abs_log_return', 'abs_log_return_5', 'abs_log_return_10',
-            'abs_price_range', 'abs_volume_change',
-            'sma_5', 'sma_10', 'sma_20', 'sma_50', 'ema_9', 'ema_21',
-            'rsi', 'macd', 'macd_signal', 'macd_hist', 'macd_abs',
-            'bb_position', 'bb_width', 'atr', 'volatility', 'volatility_abs',
-            'volume_ratio', 'volume_abs', 'money_flow_index',
-            'return_1', 'return_5', 'return_10',
-            'abs_return_1', 'abs_return_5',
-            'price_range', 'abs_price_range', 'high_low_ratio', 'close_open_ratio'
+            'log_return', 'abs_log_return',
+            'sma_5', 'sma_10', 
+            'rsi', 'macd_hist', 
+            'bb_position', 'atr', 
+            'return_1', 'return_5'
         ]
         
         available_cols = [col for col in feature_cols if col in df_clean.columns]
         
-        if len(available_cols) < 10:
+        if len(available_cols) < 5:
             return None
         
         X = df_clean[available_cols].values
@@ -328,41 +294,38 @@ def get_model_probability(coin_symbol, window_minutes, df_clean=None):
         X_df['target'] = y.astype(int)
         X_df_clean = X_df.dropna()
         
-        # --- FIX: Lowered data requirement to 30 rows ---
-        if len(X_df_clean) < 30:
+        if len(X_df_clean) < 20:
             return None
         
         X_train = X_df_clean[available_cols].values
         y_train = X_df_clean['target'].values
         
-        # Use optimized model
-        model = get_optimized_model()
-        model.fit(X_train, y_train)
+        # --- FALLBACK: Try XGBoost, fallback to Random Forest ---
+        try:
+            from xgboost import XGBClassifier
+            model = XGBClassifier(
+                n_estimators=30,
+                max_depth=3,
+                learning_rate=0.1,
+                random_state=42,
+                use_label_encoder=False
+            )
+            model.fit(X_train, y_train)
+        except:
+            from sklearn.ensemble import RandomForestClassifier
+            model = RandomForestClassifier(
+                n_estimators=30,
+                max_depth=5,
+                random_state=42
+            )
+            model.fit(X_train, y_train)
         
         last_row = df_clean[available_cols].iloc[-1].values.reshape(1, -1)
         win_prob = model.predict_proba(last_row)[0][1]
         
         return win_prob
-    except:
+    except Exception as e:
         return None
-
-# --- GMADL Loss Function (Direction-Aware) ---
-def gmadl_score(y_true, y_pred, penalty=2.0):
-    """
-    Generalized Mean Absolute Directional Loss
-    Penalizes wrong-direction predictions more heavily
-    """
-    # Convert to binary predictions
-    y_pred_binary = (y_pred >= 0.5).astype(int)
-    
-    # Count correct directions
-    correct_direction = (y_true == y_pred_binary).astype(float)
-    
-    # Wrong direction penalty
-    wrong_penalty = 1 - correct_direction
-    gmadl = correct_direction - (penalty * wrong_penalty)
-    
-    return np.mean(gmadl)
 
 # --- Main Loop ---
 all_results = []
@@ -393,7 +356,6 @@ for idx, coin in enumerate(COINS):
         df = add_enhanced_indicators(df)
         df_clean = df.dropna()
         
-        # --- FIX: Lowered data requirement to 60 rows ---
         if len(df_clean) < 60:
             continue
         
@@ -650,8 +612,7 @@ with st.sidebar:
     ✅ **Log Returns** (fixes non-stationarity)  
     ✅ **Absolute Features** (linearizes non-linear relationships)  
     ✅ **Advanced Indicators** (ATR, MFI, BB Width)  
-    ✅ **Optuna-Tuned Hyperparameters**  
-    ✅ **GMADL Loss Function** (direction-aware)  
+    ✅ **XGBoost + Random Forest Fallback**  
     """)
     
     st.divider()
@@ -674,4 +635,4 @@ with st.sidebar:
 
 # --- Footer ---
 st.divider()
-st.caption(f"⚡ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Enhanced with Log Returns, Abs Features, Optuna, GMADL")
+st.caption(f"⚡ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Enhanced with Log Returns, Abs Features, XGBoost")
