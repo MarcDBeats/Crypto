@@ -917,4 +917,3 @@ with st.sidebar:
 # --- Footer ---
 st.divider()
 st.caption(f"⚡ Code 5 • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} • Order Book (10 Levels) • Depth Slope • Microprice")
-
