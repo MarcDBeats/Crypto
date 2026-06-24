@@ -1,8 +1,9 @@
 # ============================================
-# CODE 6: ADVANCED KALSHI EDGE DETECTOR
-# Features: Hybrid CNN-GRU | Technical Indicators | Macro Data
-#           Lag Features | Ensemble Logic | Hyperparameter Tuning
+# CODE 6 LITE: ADVANCED KALSHI EDGE DETECTOR
+# Features: XGBoost + Random Forest Ensemble
+#           Technical Indicators | Macro Data | Lag Features
 #           Order Book (10 Levels) | Depth Slope | Market Regime
+#           NO TENSORFLOW REQUIRED
 # ============================================
 
 import streamlit as st
@@ -13,14 +14,18 @@ from datetime import datetime, timedelta
 import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv1D, MaxPooling1D, GRU, Dense, Dropout, Flatten
-from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.preprocessing import RobustScaler
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
 import warnings
 warnings.filterwarnings('ignore')
+
+# --- Try XGBoost, fallback to Random Forest ---
+try:
+    from xgboost import XGBClassifier
+    XGB_AVAILABLE = True
+except ImportError:
+    XGB_AVAILABLE = False
 
 # --- Page Config ---
 st.set_page_config(
@@ -167,14 +172,13 @@ st.markdown("""
 
 # --- Header ---
 st.markdown('<div class="main-header">📊 Kalshi Edge Detector Pro</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Code 6 • CNN-GRU • Technical Indicators • Macro Data • Ensemble • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Code 6 Lite • XGBoost/Random Forest Ensemble • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
 BANKROLL = 100.00
 MAX_RISK_PER_TRADE = 0.02
 MIN_EDGE = 0.05
 FLAT_THRESHOLD = 0.002
-LOOKBACK_WINDOW = 30
 
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
@@ -219,7 +223,6 @@ def fetch_yahoo_data(symbol):
 
 @st.cache_data(ttl=10)
 def fetch_macro_data():
-    """Fetch macroeconomic data (SPY, VIX, DXY)"""
     try:
         spy = yf.Ticker("SPY").history(period='5d', interval='1m')
         vix = yf.Ticker("^VIX").history(period='5d', interval='1m')
@@ -258,7 +261,6 @@ def fetch_kalshi_price(ticker):
 
 @st.cache_data(ttl=5)
 def fetch_kalshi_order_book(ticker, depth=10):
-    """Fetch full order book data with depth levels"""
     try:
         url = f"https://external-api.kalshi.com/trade-api/v2/markets/{ticker}/orderbook?depth={depth}"
         response = requests.get(url, timeout=5)
@@ -380,32 +382,27 @@ def fetch_fear_greed_index():
     except:
         return {'value': 50, 'classification': 'Neutral'}
 
-# --- Enhanced Feature Engineering ---
+# --- Advanced Feature Engineering ---
 def add_advanced_features(df):
     """Add comprehensive technical indicators, lag features, and volatility"""
     
-    # --- 1. LOG RETURNS ---
     df['log_return'] = np.log(df['close'] / df['close'].shift(1))
     df['log_return_5'] = np.log(df['close'] / df['close'].shift(5))
     df['log_return_10'] = np.log(df['close'] / df['close'].shift(10))
     
-    # --- 2. ABSOLUTE FEATURES ---
     df['abs_log_return'] = df['log_return'].abs()
     df['abs_log_return_5'] = df['log_return_5'].abs()
     df['abs_log_return_10'] = df['log_return_10'].abs()
     
-    # --- 3. LAG FEATURES ---
     df['lag_1'] = df['close'].shift(1)
     df['lag_5'] = df['close'].shift(5)
     df['lag_10'] = df['close'].shift(10)
     df['lag_volume'] = df['volume'].shift(1)
     
-    # --- 4. VOLATILITY FEATURES ---
     df['volatility_5'] = df['return_1'].rolling(5).std()
     df['volatility_10'] = df['return_1'].rolling(10).std()
     df['volatility_ratio'] = df['volatility_5'] / (df['volatility_10'] + 0.001)
     
-    # --- 5. MOVING AVERAGES ---
     df['sma_5'] = df['close'].rolling(5).mean()
     df['sma_10'] = df['close'].rolling(10).mean()
     df['sma_20'] = df['close'].rolling(20).mean()
@@ -413,44 +410,36 @@ def add_advanced_features(df):
     df['ema_9'] = df['close'].ewm(span=9).mean()
     df['ema_21'] = df['close'].ewm(span=21).mean()
     
-    # --- 6. RSI ---
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
-    # --- 7. MACD ---
     df['macd'] = df['close'].ewm(span=12).mean() - df['close'].ewm(span=26).mean()
     df['macd_signal'] = df['macd'].ewm(span=9).mean()
     df['macd_hist'] = df['macd'] - df['macd_signal']
     
-    # --- 8. BOLLINGER BANDS ---
     df['bb_middle'] = df['close'].rolling(20).mean()
     bb_std = df['close'].rolling(20).std()
     df['bb_upper'] = df['bb_middle'] + 2 * bb_std
     df['bb_lower'] = df['bb_middle'] - 2 * bb_std
     df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
     
-    # --- 9. ATR ---
     df['atr'] = (df['high'] - df['low']).rolling(14).mean()
     
-    # --- 10. STOCHASTIC OSCILLATOR ---
     low_min = df['low'].rolling(14).min()
     high_max = df['high'].rolling(14).max()
     df['stoch_k'] = 100 * ((df['close'] - low_min) / (high_max - low_min + 0.001))
     df['stoch_d'] = df['stoch_k'].rolling(3).mean()
     
-    # --- 11. WILLIAMS %R ---
     df['williams_r'] = -100 * ((high_max - df['close']) / (high_max - low_min + 0.001))
     
-    # --- 12. CCI (Commodity Channel Index) ---
     tp = (df['high'] + df['low'] + df['close']) / 3
     sma_tp = tp.rolling(20).mean()
     mad_tp = tp.rolling(20).apply(lambda x: np.mean(np.abs(x - np.mean(x))))
     df['cci'] = (tp - sma_tp) / (0.015 * mad_tp + 0.001)
     
-    # --- 13. MFI (Money Flow Index) ---
     typical_price = (df['high'] + df['low'] + df['close']) / 3
     money_flow = typical_price * df['volume']
     positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0).rolling(14).sum()
@@ -458,7 +447,6 @@ def add_advanced_features(df):
     mfi_ratio = positive_flow / (negative_flow + 0.001)
     df['mfi'] = 100 - (100 / (1 + mfi_ratio))
     
-    # --- 14. ADX (Average Directional Index) ---
     tr = np.maximum(df['high'] - df['low'], 
                     np.maximum(abs(df['high'] - df['close'].shift(1)), 
                               abs(df['low'] - df['close'].shift(1))))
@@ -476,7 +464,6 @@ def add_advanced_features(df):
     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 0.001)
     df['adx'] = dx.rolling(14).mean()
     
-    # --- 15. PRICE FEATURES ---
     df['price_range'] = (df['high'] - df['low']) / df['close']
     df['high_low_ratio'] = df['high'] / df['low']
     df['close_open_ratio'] = df['close'] / df['open']
@@ -484,83 +471,32 @@ def add_advanced_features(df):
     
     return df
 
-# --- Build Hybrid CNN-GRU Model ---
-def build_cnn_gru_model(input_shape):
-    """Build a hybrid CNN-GRU model"""
-    model = Sequential([
-        Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=input_shape),
-        MaxPooling1D(pool_size=2),
-        Dropout(0.2),
-        GRU(64, return_sequences=True),
-        Dropout(0.2),
-        GRU(32),
-        Dropout(0.2),
-        Dense(16, activation='relu'),
-        Dense(1, activation='sigmoid')
-    ])
-    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-    return model
-
-# --- Ensemble Prediction ---
-def ensemble_predict(X_scaled, lookback, n_features):
-    """Generate ensemble prediction using multiple models"""
-    try:
-        # Build sequences
-        X_seq = []
-        for i in range(lookback, len(X_scaled)):
-            X_seq.append(X_scaled[i-lookback:i])
-        X_seq = np.array(X_seq)
-        
-        if len(X_seq) == 0:
-            return 0.50
-        
-        # Build multiple models with different configurations
-        models = []
-        
-        # Model 1: CNN-GRU
-        model1 = Sequential([
-            Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=(lookback, n_features)),
-            MaxPooling1D(pool_size=2),
-            Dropout(0.2),
-            GRU(64, return_sequences=True),
-            Dropout(0.2),
-            GRU(32),
-            Dropout(0.2),
-            Dense(16, activation='relu'),
-            Dense(1, activation='sigmoid')
-        ])
-        model1.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-        models.append(model1)
-        
-        # Model 2: Simple GRU (for ensemble)
-        model2 = Sequential([
-            GRU(64, input_shape=(lookback, n_features), return_sequences=True),
-            Dropout(0.2),
-            GRU(32),
-            Dropout(0.2),
-            Dense(16, activation='relu'),
-            Dense(1, activation='sigmoid')
-        ])
-        model2.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-        models.append(model2)
-        
-        # Get predictions from each model (using last row)
-        last_seq = X_scaled[-lookback:].reshape(1, lookback, n_features)
-        
-        predictions = []
-        for model in models:
-            # Quick training (simplified for speed)
-            model.fit(X_seq[:min(100, len(X_seq))], 
-                     np.random.randint(0, 2, min(100, len(X_seq))), 
-                     epochs=5, verbose=0)
-            pred = model.predict(last_seq, verbose=0)[0][0]
-            predictions.append(pred)
-        
-        # Ensemble: average predictions
-        final_pred = np.mean(predictions)
-        return final_pred
-        
-    except Exception as e:
+# --- Ensemble Model (XGBoost + Random Forest) ---
+def get_ensemble_prediction(X_train, y_train, X_test):
+    """Generate ensemble prediction using XGBoost and Random Forest"""
+    
+    predictions = []
+    
+    # Model 1: XGBoost (if available)
+    if XGB_AVAILABLE:
+        try:
+            xgb = XGBClassifier(n_estimators=50, max_depth=3, learning_rate=0.1, random_state=42)
+            xgb.fit(X_train, y_train)
+            pred_xgb = xgb.predict_proba(X_test)[0][1]
+            predictions.append(pred_xgb)
+        except:
+            pass
+    
+    # Model 2: Random Forest (always available)
+    rf = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
+    rf.fit(X_train, y_train)
+    pred_rf = rf.predict_proba(X_test)[0][1]
+    predictions.append(pred_rf)
+    
+    # Ensemble: average predictions
+    if predictions:
+        return np.mean(predictions)
+    else:
         return 0.50
 
 # --- MAIN LOOP ---
@@ -570,7 +506,6 @@ best_bets = []
 fear_greed = fetch_fear_greed_index()
 macro_data = fetch_macro_data()
 
-# Fetch Kalshi prices and order books
 kalshi_prices = {}
 kalshi_order_books = {}
 for coin in COINS:
@@ -600,7 +535,6 @@ for idx, coin in enumerate(COINS):
         if len(df_clean) < 100:
             continue
         
-        # Get enhanced model probability using ensemble
         feature_cols = [
             'close', 'volume', 'log_return', 'abs_log_return',
             'lag_1', 'lag_5', 'volatility_5', 'volatility_10',
@@ -625,16 +559,19 @@ for idx, coin in enumerate(COINS):
         if len(X_df_clean) < 50:
             continue
         
-        # Scale features
+        # Split data
+        X_train = X_df_clean[available_cols].values[:-1]
+        y_train = X_df_clean['target'].values[:-1]
+        X_test = X_df_clean[available_cols].values[-1:].reshape(1, -1)
+        
+        # Scale
         scaler = RobustScaler()
-        X_scaled = scaler.fit_transform(X_df_clean[available_cols].values)
-        y_train = X_df_clean['target'].values
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
         
         # Get ensemble prediction
-        prob_5m = ensemble_predict(X_scaled, LOOKBACK_WINDOW, len(available_cols))
-        
-        # Also get a simpler model prediction for 15m
-        prob_15m = prob_5m * 0.95 + 0.025  # Slight adjustment for longer window
+        prob_5m = get_ensemble_prediction(X_train_scaled, y_train, X_test_scaled)
+        prob_15m = prob_5m * 0.95 + 0.025
         
         market_price = kalshi_prices.get(coin, 0.50)
         
@@ -643,13 +580,11 @@ for idx, coin in enumerate(COINS):
         spread_quality = order_book.get('spread_quality', '🔴 Poor')
         liquidity_score = order_book.get('liquidity_score', 0)
         liquidity_label = order_book.get('liquidity_label', '🔴 Low')
-        imbalance_5 = order_book.get('imbalance_5', 0)
         imbalance_10 = order_book.get('imbalance_10', 0)
         microprice = order_book.get('microprice', 0.50)
         depth_slope = order_book.get('depth_slope', 1)
         depth_slope_label = order_book.get('depth_slope_label', '🟡 Balanced')
         
-        # Market regime detection
         if liquidity_score >= 0.7 and imbalance_10 > 0.3:
             regime = "🟢 High Activity / Deep Liquidity"
             regime_class = "regime-high"
@@ -673,7 +608,6 @@ for idx, coin in enumerate(COINS):
             edge_5m *= 0.8
             edge_15m *= 0.8
         
-        # Ternary classification
         expected_move = abs(prob_5m - 0.50) * 100
         
         if expected_move < FLAT_THRESHOLD * 100:
@@ -733,8 +667,6 @@ for idx, coin in enumerate(COINS):
             'Spread': spread,
             'Spread_Str': f"{spread:.3f}",
             'Spread_Quality': spread_quality,
-            'Imbalance_5': imbalance_5,
-            'Imbalance_5_Str': f"{imbalance_5:.2f}",
             'Imbalance_10': imbalance_10,
             'Imbalance_10_Str': f"{imbalance_10:.2f}",
             'Microprice': microprice,
@@ -781,7 +713,6 @@ progress_bar.empty()
 # 📊 DASHBOARD DISPLAY
 # ============================================
 
-# --- Market Regime Banner ---
 if all_results:
     first_coin = all_results[0] if all_results else {}
     regime_display = first_coin.get('Regime', '🟡 Moderate Activity / Good Liquidity')
@@ -793,7 +724,6 @@ if all_results:
     </div>
     """, unsafe_allow_html=True)
 
-# --- Fear & Greed ---
 st.markdown("### 🧠 Market Sentiment")
 fg_col1, fg_col2, fg_col3, fg_col4, fg_col5 = st.columns([1, 1, 2, 1, 1])
 with fg_col3:
@@ -808,7 +738,6 @@ with fg_col3:
 
 st.divider()
 
-# --- Macro Data Summary ---
 st.markdown("### 🌍 Macro Indicators")
 macro_col1, macro_col2, macro_col3 = st.columns(3)
 macro_col1.metric("SPY", f"${macro_data.get('spy_close', 0):.2f}", delta=f"{macro_data.get('spy_change', 0)*100:.2f}%")
@@ -817,7 +746,6 @@ macro_col3.metric("DXY", f"{macro_data.get('dxy_close', 0):.2f}", delta="—")
 
 st.divider()
 
-# --- Metric Cards ---
 st.markdown("### 📊 Market Overview")
 m_cols = st.columns(6)
 
@@ -882,9 +810,7 @@ for i, result in enumerate(all_results):
 
 st.divider()
 
-# --- Detailed Table ---
-st.markdown("### 📈 Detailed Edge Analysis (Enhanced Features)")
-
+st.markdown("### 📈 Detailed Edge Analysis")
 if all_results:
     df_display = pd.DataFrame([{
         'Coin': r['Name'],
@@ -893,12 +819,11 @@ if all_results:
         'Kalshi Price': r['Market_Price_Str'],
         'Spread': r['Spread_Str'],
         'Spread Quality': r['Spread_Quality'],
-        'Imbalance (10)': r['Imbalance_10_Str'],
+        'Imbalance': r['Imbalance_10_Str'],
         'Microprice': r['Microprice_Str'],
         'Depth Slope': r['Depth_Slope_Str'],
         'Depth Slope Label': r['Depth_Slope_Label'],
         'Liquidity': r['Liquidity'],
-        'Regime': r['Regime'],
         'Model 5m': r['Prob_5m_Str'],
         'Edge 5m': r['Edge_5m_Str'],
         'Decision 5m': r['Decision_5m'],
@@ -915,9 +840,7 @@ else:
 
 st.divider()
 
-# --- Best Bets ---
 st.markdown("### ⭐ Best Bets")
-
 if best_bets:
     cols = st.columns(min(len(best_bets), 3))
     for i, bet in enumerate(best_bets[:6]):
@@ -988,32 +911,34 @@ with st.sidebar:
     st.markdown(f"**Max Risk/Trade:** {MAX_RISK_PER_TRADE*100:.0f}%")
     st.markdown(f"**Min Edge:** {MIN_EDGE*100:.0f}%")
     st.markdown(f"**Flat Threshold:** {FLAT_THRESHOLD*100:.1f}%")
-    st.markdown(f"**Lookback Window:** {LOOKBACK_WINDOW} min")
     
     st.divider()
     
-    st.markdown("### 🆕 Code 6 Features")
+    st.markdown("### 🆕 Code 6 Lite Features")
     st.markdown("""
-    ✅ **Hybrid CNN-GRU** (Conv1D + GRU)  
+    ✅ **XGBoost + Random Forest Ensemble**  
     ✅ **20+ Technical Indicators** (ADX, Stochastic, CCI, MFI, Williams %R)  
     ✅ **Lag Features** (lag_1, lag_5, lag_10)  
     ✅ **Volatility Features** (rolling std, volatility ratio)  
     ✅ **Macro Data** (SPY, VIX, DXY)  
-    ✅ **Ensemble Logic** (multi-model averaging)  
     ✅ **RobustScaler** (outlier-resistant scaling)  
     ✅ **All Code 5 Features** (Order Book, Depth Slope, Regime)  
     """)
     
     st.divider()
     
-    st.markdown("### 📊 Feature Count")
-    st.markdown(f"**Total Features:** {len(feature_cols) if 'feature_cols' in dir() else '20+'}")
+    st.markdown("### 🎯 Model Status")
+    if XGB_AVAILABLE:
+        st.success("✅ XGBoost: Available")
+    else:
+        st.warning("⚠️ XGBoost: Not installed (using Random Forest only)")
+    st.success("✅ Random Forest: Available")
     
     st.divider()
     
     st.markdown("### 🔄 Manual Refresh")
-    st.caption("Press 'R' or click the refresh button in your browser to get the latest data.")
+    st.caption("Press 'R' or click the refresh button in your browser.")
 
 # --- Footer ---
 st.divider()
-st.caption(f"⚡ Code 6 • Hybrid CNN-GRU • 20+ Indicators • Macro Data • Ensemble • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Code 6 Lite • XGBoost/Random Forest Ensemble • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
