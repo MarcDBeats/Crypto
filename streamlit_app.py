@@ -769,4 +769,22 @@ with st.sidebar:
     st.markdown(f"**Trading Window:** {PREDICT_WINDOW} minutes before settlement")
     st.markdown(f"**Min Edge:** {MIN_EDGE*100:.0f}%")
     st.markdown(f"**Current Window:** {'🟢 Open' if is_active else '🔴 Closed'}")
-    st.markdown(f"**Minutes to Settlement:** {minutes_until}m
+    st.markdown(f"**Minutes to Settlement:** {minutes_until}m")
+    
+    st.divider()
+    
+    st.markdown("### 🎯 Quick Guide")
+    st.markdown("""
+    1. **Check the timer** — wait for trading window
+    2. **Look at price targets** — model's prediction
+    3. **Check Best Bets** — highest confidence signals
+    4. **Place trade** — BUY YES or BUY NO on Kalshi
+    """)
+    
+    st.divider()
+    
+    st.markdown("### 🔄 Refresh")
+    st.caption("Click refresh in your browser to update data")
+
+# --- Footer ---
+st.caption(f"⚡ Code 7 • Full data model • Clean dashboard • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
