@@ -1,9 +1,10 @@
 # ============================================
-# CODE 5.3: KALSHI EDGE DETECTOR WITH SETTLEMENT BACKTEST (FINAL FIX)
-# Features: All previous features + Extra decimal places for accuracy
-#           All times displayed in Central Time (CT)
-#           Settlement times exactly at :00, :15, :30, :45
-#           Shows ONLY ONE settlement per coin (the most recent)
+# CODE 5.3: KALSHI EDGE DETECTOR WITH ORDER BOOK (FULLY FIXED)
+# Features: All previous features + True Kalshi Ask Price
+#           Edge calculated against ASK (execution price)
+#           CLEAR VISUAL COMPARISON: Model vs Kalshi
+#           Bid-Ask Spread displayed
+#           Extra decimal places for accuracy
 # ============================================
 
 import streamlit as st
@@ -29,7 +30,7 @@ try:
     TZ_AVAILABLE = True
 except ImportError:
     TZ_AVAILABLE = False
-    st.warning("pytz not installed. Using UTC times. Run: pip install pytz")
+    st.warning("pytz not installed. Using UTC times.")
 
 def to_local_time(utc_dt):
     if not TZ_AVAILABLE:
@@ -69,7 +70,7 @@ st.markdown("""
         border-radius: 0.5rem;
         border: 1px solid #3d3d5c;
         text-align: center;
-        min-height: 180px;
+        min-height: 200px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -93,6 +94,14 @@ st.markdown("""
         font-size: 0.65rem;
         color: #888;
         margin-top: 0.2rem;
+    }
+    .metric-card .kalshi-compare {
+        font-size: 0.8rem;
+        padding: 0.3rem;
+        border-radius: 0.3rem;
+        margin-top: 0.2rem;
+        background: #1a1a2e;
+        border: 1px solid #3d3d5c;
     }
     .edge-positive {
         color: #00b894;
@@ -215,32 +224,27 @@ st.markdown("""
     .direction-flat {
         color: #636e72;
     }
-    .settlement-card {
-        background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%);
-        padding: 0.8rem;
-        border-radius: 0.5rem;
-        border: 2px solid #3d3d5c;
-        text-align: center;
-        margin: 0.2rem 0;
+    .comparison-box {
+        background: #1a1a2e;
+        padding: 0.5rem;
+        border-radius: 0.3rem;
+        border: 1px solid #3d3d5c;
+        margin-top: 0.3rem;
+        font-size: 0.75rem;
     }
-    .settlement-win {
-        border-color: #00b894 !important;
+    .comparison-box .label {
+        color: #888;
+        font-weight: 600;
     }
-    .settlement-loss {
-        border-color: #ff6b6b !important;
-    }
-    .settlement-card .result-label {
-        font-size: 0.8rem;
+    .comparison-box .model-val {
+        color: #667eea;
         font-weight: 700;
     }
-    .settlement-card .result-win {
-        color: #00b894;
+    .comparison-box .kalshi-val {
+        color: #fdcb6e;
+        font-weight: 700;
     }
-    .settlement-card .result-loss {
-        color: #ff6b6b;
-    }
-    .settlement-card .pnl {
-        font-size: 1.1rem;
+    .comparison-box .edge-val {
         font-weight: 700;
     }
 </style>
@@ -249,7 +253,7 @@ st.markdown("""
 # --- Header ---
 local_time = get_current_local_time()
 st.markdown('<div class="main-header">📊 Kalshi Edge Detector Pro</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Code 5.3 • Settlement Backtest • All times in CT • Updated: {local_time.strftime('%Y-%m-%d %H:%M:%S')} CT")
+st.caption(f"⚡ Code 5.3 • True Kalshi Ask Price • Edge vs Execution Price • Updated: {local_time.strftime('%Y-%m-%d %H:%M:%S')} CT")
 
 # --- Settings ---
 BANKROLL = 100.00
@@ -278,33 +282,28 @@ COIN_METADATA = {
     'DOGE-USD': {'name': 'Dogecoin', 'symbol': 'DOGE', 'color': '#c2a633'}
 }
 
-# --- FORMATTING HELPERS (EXTRA DECIMAL PLACES) ---
+# --- FORMATTING HELPERS ---
 def fmt_price(val):
-    """Format price with 4 decimal places for accuracy"""
     if val is None or pd.isna(val):
         return '—'
     return f"${val:,.4f}"
 
 def fmt_kalshi(val):
-    """Format Kalshi price with 4 decimal places"""
     if val is None or pd.isna(val):
         return '—'
     return f"{val:.4f}"
 
 def fmt_pnl(val):
-    """Format P&L with 4 decimal places"""
     if val is None or pd.isna(val):
         return '—'
     return f"${val:,.4f}"
 
 def fmt_percent(val):
-    """Format percentage with 1 decimal place"""
     if val is None or pd.isna(val):
         return '—'
     return f"{val:+.1f}%"
 
 def fmt_confidence(val):
-    """Format confidence as percentage"""
     if val is None or pd.isna(val):
         return '—'
     return f"{val:.0%}"
@@ -331,7 +330,6 @@ class SettlementTracker:
     def add_settlement(self, coin, settlement_time, predicted_direction, 
                        predicted_price, actual_price, confidence, edge,
                        win, pnl):
-        # Remove any existing entry for this coin
         self.data['history'] = [h for h in self.data['history'] if h['coin'] != coin]
         
         entry = {
@@ -468,7 +466,17 @@ def fetch_kalshi_order_book(ticker, depth=10):
         best_yes_bid = float(yes_bids[0][0]) if yes_bids else 0
         best_no_bid = float(no_bids[0][0]) if no_bids else 0
         
-        spread = best_yes_bid - best_no_bid if best_yes_bid and best_no_bid else 0
+        # --- NEW: Calculate implied YES ask from NO bid ---
+        # Kalshi formula: YES Ask = 1.00 - NO Bid
+        implied_yes_ask = 1.00 - best_no_bid if best_no_bid > 0 else 0
+        
+        spread = best_yes_bid - implied_yes_ask if best_yes_bid and implied_yes_ask else 0
+        
+        # --- NEW: Calculate true bid-ask spread ---
+        if best_yes_bid > 0 and implied_yes_ask > 0:
+            bid_ask_spread = implied_yes_ask - best_yes_bid
+        else:
+            bid_ask_spread = 0
         
         if spread < 0.02:
             spread_quality = "🟢 Excellent"
@@ -511,6 +519,8 @@ def fetch_kalshi_order_book(ticker, depth=10):
         return {
             'best_yes_bid': best_yes_bid,
             'best_no_bid': best_no_bid,
+            'implied_yes_ask': implied_yes_ask,
+            'bid_ask_spread': bid_ask_spread,
             'spread': spread,
             'spread_quality': spread_quality,
             'imbalance_10': imbalance_10,
@@ -525,6 +535,8 @@ def fetch_kalshi_order_book(ticker, depth=10):
         return {
             'best_yes_bid': 0,
             'best_no_bid': 0,
+            'implied_yes_ask': 0,
+            'bid_ask_spread': 0,
             'spread': 0,
             'spread_quality': '🔴 Poor',
             'imbalance_10': 0,
@@ -848,6 +860,20 @@ for idx, coin in enumerate(COINS):
         market_price = kalshi_prices.get(coin, 0.50)
         
         order_book = kalshi_order_books.get(coin, {})
+        
+        # --- NEW: Get order book values with ASK ---
+        best_yes_bid = order_book.get('best_yes_bid', 0)
+        implied_yes_ask = order_book.get('implied_yes_ask', 0)
+        bid_ask_spread = order_book.get('bid_ask_spread', 0)
+        
+        # --- NEW: Use ASK price for edge calculation ---
+        # The true cost to buy is the ASK price
+        # So compare model's probability to the ASK price
+        if implied_yes_ask > 0:
+            execution_price = implied_yes_ask
+        else:
+            execution_price = market_price  # Fallback to midpoint
+        
         spread = order_book.get('spread', 0)
         spread_quality = order_book.get('spread_quality', '🔴 Poor')
         liquidity_score = order_book.get('liquidity_score', 0)
@@ -869,8 +895,9 @@ for idx, coin in enumerate(COINS):
             regime = "🔴 Very Low Activity / Poor Liquidity"
             regime_class = "regime-low"
         
-        edge_5m = prob_5m - market_price
-        edge_15m = prob_15m - market_price
+        # --- NEW: Edge calculated against ASK (execution price) ---
+        edge_5m = prob_5m - execution_price if prob_5m else 0
+        edge_15m = prob_15m - execution_price if prob_15m else 0
         
         if liquidity_score < 0.3:
             edge_5m *= 0.6
@@ -1033,6 +1060,12 @@ for idx, coin in enumerate(COINS):
             'Price_Str': fmt_price(current_price),
             'Market_Price': market_price,
             'Market_Price_Str': fmt_kalshi(market_price),
+            'Best_Yes_Bid': best_yes_bid,
+            'Best_Yes_Bid_Str': fmt_kalshi(best_yes_bid),
+            'Implied_Yes_Ask': implied_yes_ask,
+            'Implied_Yes_Ask_Str': fmt_kalshi(implied_yes_ask),
+            'Bid_Ask_Spread': bid_ask_spread,
+            'Bid_Ask_Spread_Str': f"{bid_ask_spread:.4f}",
             'Spread': spread,
             'Spread_Str': f"{spread:.4f}",
             'Spread_Quality': spread_quality,
@@ -1087,7 +1120,6 @@ st.caption(f"What would have happened if you placed a $10 bet on the model's las
 if settlement_results:
     df_settlement = pd.DataFrame(settlement_results)
     
-    # Only show the most recent settlement per coin
     df_settlement = df_settlement.sort_values('Time', ascending=False)
     df_settlement = df_settlement.drop_duplicates(subset=['Coin', 'Symbol'], keep='first')
     
@@ -1213,6 +1245,44 @@ for idx, coin in enumerate(COINS):
 
 st.divider()
 
+# --- NEW: Kalshi vs Model Comparison Section ---
+st.markdown("### 🔍 Kalshi vs Model Comparison")
+st.caption("Compare your model's probability against Kalshi's actual execution price (ASK)")
+
+if all_results:
+    # Create comparison table
+    comparison_data = []
+    for r in all_results:
+        comparison_data.append({
+            'Coin': r['Name'],
+            'Symbol': r['Symbol'],
+            'Model Probability': r['Prob_5m_Str'],
+            'Kalshi YES Ask': r['Implied_Yes_Ask_Str'],
+            'Kalshi YES Bid': r['Best_Yes_Bid_Str'],
+            'Bid-Ask Spread': r['Bid_Ask_Spread_Str'],
+            'True Edge': r['Edge_5m_Str'],
+            'Decision': r['Decision_5m'],
+            'Liquidity': r['Liquidity']
+        })
+    
+    df_compare = pd.DataFrame(comparison_data)
+    st.dataframe(df_compare, use_container_width=True, hide_index=True)
+    
+    # Explanation
+    st.info("""
+    📖 **How to read this:**
+    - **Model Probability**: Your model's estimate of the chance of going UP
+    - **Kalshi YES Ask**: The price you'd actually pay to buy a YES contract (execution price)
+    - **Kalshi YES Bid**: The price you'd receive if selling a YES contract
+    - **Bid-Ask Spread**: The difference between bid and ask (trading cost)
+    - **True Edge**: Model Probability - Kalshi YES Ask (positive = good opportunity)
+    - **Decision**: BUY YES if edge > 5%, BUY NO if edge < -5%, otherwise SKIP
+    """)
+else:
+    st.warning("No data available for comparison.")
+
+st.divider()
+
 # --- Market Regime Banner ---
 if all_results:
     first_coin = all_results[0] if all_results else {}
@@ -1248,7 +1318,9 @@ macro_col3.metric("DXY", f"{macro_data.get('dxy_close', 0):.2f}", delta="—")
 
 st.divider()
 
-st.markdown("### 📊 Market Overview")
+# --- Market Overview with Comparison Box ---
+st.markdown("### 📊 Market Overview (Model vs Kalshi)")
+
 m_cols = st.columns(6)
 
 for i, result in enumerate(all_results):
@@ -1281,15 +1353,27 @@ for i, result in enumerate(all_results):
             st.markdown(f"""
             <div class="metric-card">
                 <div class="coin-name">{result['Name']} ({result['Symbol']})</div>
-                <div class="coin-price" style="font-size: 1.2rem; font-weight: 600; margin: 0.3rem 0;">
-                    {result['Price_Str']}
+                <div class="coin-price">{result['Price_Str']}</div>
+                
+                <div class="comparison-box">
+                    <div style="display: flex; justify-content: space-between;">
+                        <span class="label">🤖 Model:</span>
+                        <span class="model-val">{result['Prob_5m_Str']}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span class="label">🏛️ Kalshi Ask:</span>
+                        <span class="kalshi-val">{result['Implied_Yes_Ask_Str']}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 0.2rem; border-top: 1px solid #3d3d5c; padding-top: 0.2rem;">
+                        <span class="label">💎 Edge:</span>
+                        <span class="edge-val {edge_class}">{edge_display}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: #888;">
+                        <span>Spread: {result['Bid_Ask_Spread_Str']}</span>
+                        <span>{result['Liquidity']}</span>
+                    </div>
                 </div>
-                <div style="font-size: 0.8rem; color: #888;">
-                    Kalshi: {result['Market_Price_Str']}
-                </div>
-                <div class="edge-display {edge_class}" style="font-size: 1.2rem; font-weight: 700; margin: 0.3rem 0;">
-                    Edge: {edge_display}
-                </div>
+                
                 <div style="display: flex; justify-content: center; gap: 0.5rem; margin-top: 0.3rem;">
                     <span style="font-size: 0.7rem; color: #888;">5m:</span>
                     <span style="font-size: 0.8rem; font-weight: 600; color: {dir_color};">
@@ -1320,30 +1404,21 @@ if all_results:
         'Coin': r['Name'],
         'Symbol': r['Symbol'],
         'Price': r['Price_Str'],
-        'Kalshi Price': r['Market_Price_Str'],
-        'Spread': r['Spread_Str'],
-        'Spread Quality': r['Spread_Quality'],
-        'Imbalance': r['Imbalance_10_Str'],
-        'Depth Slope': r['Depth_Slope_Str'],
-        'Depth Slope Label': r['Depth_Slope_Label'],
-        'Liquidity': r['Liquidity'],
         'Model 5m': r['Prob_5m_Str'],
+        'Kalshi Ask': r['Implied_Yes_Ask_Str'],
+        'Kalshi Bid': r['Best_Yes_Bid_Str'],
+        'Spread': r['Bid_Ask_Spread_Str'],
         'Edge 5m': r['Edge_5m_Str'],
         'Decision 5m': r['Decision_5m'],
         'Model 15m': r['Prob_15m_Str'],
         'Edge 15m': r['Edge_15m_Str'],
         'Decision 15m': r['Decision_15m'],
+        'Liquidity': r['Liquidity'],
         '5m Change': f"{r['Change_5m']:+.2f}%",
         '15m Change': f"{r['Change_15m']:+.2f}%"
     } for r in all_results])
     
-    def color_price(val):
-        if isinstance(val, str) and val.startswith('$'):
-            return 'font-family: monospace;'
-        return ''
-    
-    styled_df = df_display.style.map(color_price)
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
     st.warning("No predictions available.")
 
@@ -1393,10 +1468,10 @@ if best_bets:
                 <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
                     <span>Time: {timeframe}</span>
                     <span>Model: {prob}</span>
-                    <span>Kalshi: {bet['Market_Price_Str']}</span>
+                    <span>Kalshi Ask: {bet['Implied_Yes_Ask_Str']}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
-                    <span>Spread: {bet['Spread_Str']}</span>
+                    <span>Spread: {bet['Bid_Ask_Spread_Str']}</span>
                     <span>Liquidity: {bet['Liquidity']}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
@@ -1427,6 +1502,10 @@ with st.sidebar:
     
     st.markdown("### 🆕 Code 5.3 Features")
     st.markdown("""
+    ✅ **True Kalshi ASK Price** — What you actually pay to buy  
+    ✅ **Model vs Kalshi Comparison** — Clear side-by-side view  
+    ✅ **Bid-Ask Spread** — Trading cost displayed  
+    ✅ **Edge vs Execution Price** — Realistic edge calculation  
     ✅ **Previous Settlement Comparison** — Shows predicted vs. actual price  
     ✅ **Hypothetical P&L** — $10 bet simulation per coin  
     ✅ **Win/Loss Tracking** — ✅ WIN or ❌ LOSS for each prediction  
@@ -1439,12 +1518,12 @@ with st.sidebar:
     
     st.divider()
     
-    st.markdown("### 📊 How It Works")
+    st.markdown("### 📊 How to Read the Comparison")
     st.markdown("""
-    1. **Model predicts** direction for each coin  
-    2. **At the next Kalshi settlement**, compares prediction to actual price  
-    3. **Records result** — win/loss and hypothetical P&L  
-    4. **Tracks performance** — shows your model's real accuracy  
+    1. **Model Probability** = Your model's estimate (higher = better)
+    2. **Kalshi Ask** = What you actually pay (lower = better for buying YES)
+    3. **True Edge** = Model - Ask (positive = good, negative = bad)
+    4. **Spread** = Bid-Ask difference (smaller = better liquidity)
     """)
     
     st.divider()
@@ -1454,4 +1533,4 @@ with st.sidebar:
 
 # --- Footer ---
 st.divider()
-st.caption(f"⚡ Code 5.3 • Settlement Backtest • All times in CT • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Code 5.3 • True Kalshi Ask • Edge vs Execution Price • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
