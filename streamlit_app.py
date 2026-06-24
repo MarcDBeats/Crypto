@@ -1,8 +1,9 @@
 # ============================================
-# CODE 5.3: KALSHI EDGE DETECTOR WITH SETTLEMENT BACKTEST (FIXED)
+# CODE 5.3: KALSHI EDGE DETECTOR WITH SETTLEMENT BACKTEST (FULLY FIXED)
 # Features: All previous features + Time zone fix + Kalshi schedule alignment
 #           All times displayed in Central Time (CT)
 #           Settlement times exactly at :00, :15, :30, :45
+#           Shows ONLY the most recent settlement per coin
 # ============================================
 
 import streamlit as st
@@ -615,50 +616,45 @@ def add_advanced_features(df):
     
     return df
 
-# --- GET NEXT KALSHI SETTLEMENT TIME (FIXED) ---
+# --- GET NEXT KALSHI SETTLEMENT TIME ---
 def get_next_kalshi_settlement(current_time):
     """Get the next Kalshi settlement time (:00, :15, :30, :45)"""
     minute = current_time.minute
-    # Round up to next :00, :15, :30, :45
     minutes_to_next = (15 - (minute % 15)) % 15
     if minutes_to_next == 0:
-        minutes_to_next = 15  # If exactly on a settlement, go to next one
+        minutes_to_next = 15
     
     next_settlement = current_time + timedelta(minutes=minutes_to_next)
     next_settlement = next_settlement.replace(second=0, microsecond=0)
     
     return next_settlement, minutes_to_next
 
-# --- Get previous Kalshi settlement ---
+# --- GET PREVIOUS KALSHI SETTLEMENT ---
 def get_previous_kalshi_settlement(current_time):
     """Get the previous Kalshi settlement time (:00, :15, :30, :45)"""
     minute = current_time.minute
-    # Round down to previous :00, :15, :30, :45
     minutes_since = minute % 15
     if minutes_since == 0:
-        minutes_since = 15  # If exactly on a settlement, go back one
+        minutes_since = 15
     
     prev_settlement = current_time - timedelta(minutes=minutes_since)
     prev_settlement = prev_settlement.replace(second=0, microsecond=0)
     
     return prev_settlement
 
-# --- Get contract target with Kalshi alignment ---
+# --- GET CONTRACT TARGET WITH KALSHI ALIGNMENT ---
 def get_next_contract_target(df_clean, coin_symbol):
     """Get the model's price target for the next Kalshi contract"""
     try:
         current_price = df_clean['close'].iloc[-1]
         
-        # --- FIX: Use local time for Kalshi settlement alignment ---
         if TZ_AVAILABLE:
             current_time = datetime.now(pytz.timezone(LOCAL_TZ))
         else:
             current_time = datetime.now()
         
-        # Get next Kalshi settlement time
         next_settlement, minutes_until = get_next_kalshi_settlement(current_time)
         
-        # If less than 2 minutes, use the next one
         if minutes_until < 2:
             next_settlement, minutes_until = get_next_kalshi_settlement(
                 current_time + timedelta(minutes=15)
@@ -736,7 +732,7 @@ def get_next_contract_target(df_clean, coin_symbol):
 # --- MAIN LOOP ---
 all_results = []
 best_bets = []
-settlement_results = []
+settlement_results = []  # This will hold the current display data
 
 fear_greed = fetch_fear_greed_index()
 macro_data = fetch_macro_data()
@@ -918,25 +914,20 @@ for idx, coin in enumerate(COINS):
         metadata = COIN_METADATA.get(coin, {'name': coin.replace('-USD', ''), 'symbol': coin.replace('-USD', ''), 'color': '#ffffff'})
         current_price = df_clean['close'].iloc[-1]
         
-        # --- SIMULATE SETTLEMENT COMPARISON USING KALSHI SCHEDULE ---
+        # --- SIMULATE SETTLEMENT COMPARISON ---
         if len(df_clean) > 30:
-            # Get current local time
             if TZ_AVAILABLE:
                 current_local = datetime.now(pytz.timezone(LOCAL_TZ))
             else:
                 current_local = datetime.now()
             
-            # Get previous Kalshi settlement time
             prev_settlement = get_previous_kalshi_settlement(current_local)
             
-            # Find the data point closest to the previous settlement time
-            # (The actual price at that settlement time)
             closest_idx = None
             closest_diff = None
             
             for i in range(len(df_clean) - 1, -1, -1):
                 row_time = df_clean['time'].iloc[i]
-                # Convert row time to local time for comparison
                 if TZ_AVAILABLE:
                     row_time_local = to_local_time(row_time)
                 else:
@@ -946,7 +937,6 @@ for idx, coin in enumerate(COINS):
                 if closest_diff is None or diff < closest_diff:
                     closest_diff = diff
                     closest_idx = i
-                    # If within 1 minute, break
                     if diff < 60:
                         break
             
@@ -954,15 +944,12 @@ for idx, coin in enumerate(COINS):
                 settlement_price = df_clean['close'].iloc[closest_idx]
                 settlement_time = df_clean['time'].iloc[closest_idx]
                 
-                # Get the price 15 minutes before settlement (where the model made its prediction)
                 pred_idx = closest_idx - 15
                 if pred_idx > 0:
                     pred_price = df_clean['close'].iloc[pred_idx]
                     
-                    # Get the model's prediction at that time
                     if len(df_clean) > pred_idx + 10:
                         try:
-                            # Get data up to the prediction point
                             X_prev = df_clean[available_cols].iloc[:pred_idx].values
                             if len(X_prev) >= 20:
                                 X_prev_last = X_prev[-1:].reshape(1, -1)
@@ -1005,7 +992,6 @@ for idx, coin in enumerate(COINS):
                                         pnl=pnl
                                     )
                                     
-                                    # Format time in CT
                                     if TZ_AVAILABLE:
                                         time_str = to_local_time(settlement_time).strftime('%I:%M %p CT')
                                     else:
@@ -1079,12 +1065,17 @@ progress_bar.empty()
 # 📊 DASHBOARD DISPLAY
 # ============================================
 
-# --- Previous Settlement Results Section ---
+# --- Previous Settlement Results Section (FIXED) ---
 st.markdown("### 📊 Previous Settlement Results")
 st.caption(f"What would have happened if you placed a $10 bet on the model's last prediction (All times in CT)")
 
 if settlement_results:
     df_settlement = pd.DataFrame(settlement_results)
+    
+    # --- FIX: Only show the most recent settlement per coin ---
+    # Sort by time (most recent first) and drop duplicates
+    df_settlement = df_settlement.sort_values('Time', ascending=False)
+    df_settlement = df_settlement.drop_duplicates(subset=['Coin', 'Symbol'], keep='first')
     
     def color_result(val):
         if 'WIN' in str(val):
@@ -1114,6 +1105,7 @@ if settlement_results:
     
     st.dataframe(styled_settlement, use_container_width=True, hide_index=True)
     
+    # Overall stats from the tracker
     stats = settlement_tracker.get_stats()
     if stats:
         col1, col2, col3, col4 = st.columns(4)
@@ -1421,6 +1413,7 @@ with st.sidebar:
     ✅ **Per-Coin Performance** — See which coins your model predicts best  
     ✅ **Local Time Zone** — All times in Central Time (CT)  
     ✅ **Kalshi Schedule Alignment** — :00, :15, :30, :45 settlements  
+    ✅ **Only Most Recent Settlement Shown** — One result per coin  
     """)
     
     st.divider()
