@@ -1,7 +1,8 @@
 # ============================================
-# CODE 5.3: KALSHI EDGE DETECTOR WITH SETTLEMENT BACKTEST
+# CODE 5.3: KALSHI EDGE DETECTOR WITH SETTLEMENT BACKTEST (FIXED)
 # Features: All Code 5.2 Features + Previous Settlement Comparison
 #           Hypothetical P&L | Win/Loss Tracking | Accuracy Tracker
+#           FIXED: Pandas 2.1+ compatibility (map instead of applymap)
 # ============================================
 
 import streamlit as st
@@ -230,7 +231,7 @@ BANKROLL = 100.00
 MAX_RISK_PER_TRADE = 0.02
 MIN_EDGE = 0.05
 FLAT_THRESHOLD = 0.002
-BET_SIZE = 10.00  # Fixed bet size for hypothetical P&L
+BET_SIZE = 10.00
 
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
@@ -292,7 +293,6 @@ class SettlementTracker:
         
         self.data['history'].append(entry)
         
-        # Keep only last 100 entries
         if len(self.data['history']) > 100:
             self.data['history'] = self.data['history'][-100:]
         
@@ -300,7 +300,6 @@ class SettlementTracker:
         self._save_data()
     
     def _update_stats(self):
-        """Update overall statistics"""
         history = self.data['history']
         if not history:
             return
@@ -309,7 +308,6 @@ class SettlementTracker:
         losses = len(history) - wins
         total_pnl = sum(h['pnl'] for h in history)
         
-        # Per-coin stats
         coin_stats = {}
         for h in history:
             coin = h['coin']
@@ -336,7 +334,6 @@ class SettlementTracker:
         }
     
     def get_last_settlement(self, coin):
-        """Get the last settlement for a specific coin"""
         history = self.data['history']
         for h in reversed(history):
             if h['coin'] == coin:
@@ -344,7 +341,6 @@ class SettlementTracker:
         return None
     
     def get_stats(self):
-        """Get overall statistics"""
         return self.data['stats']
 
 # Initialize settlement tracker
@@ -866,18 +862,11 @@ for idx, coin in enumerate(COINS):
         current_price = df_clean['close'].iloc[-1]
         
         # --- SIMULATE SETTLEMENT COMPARISON ---
-        # Use the last 15-minute period to simulate the previous settlement
         if len(df_clean) > 15:
-            prev_price = df_clean['close'].iloc[-16]  # 15 minutes ago
+            prev_price = df_clean['close'].iloc[-16]
             prev_time = df_clean['time'].iloc[-16]
             
-            # Determine what the model would have predicted at that time
-            # Use the model's prediction from 15 minutes ago (if available in history)
-            prev_prediction = None
-            
-            # For now, simulate based on the current model's retrospective view
             if len(df_clean) > 30:
-                # Get data from 15 minutes ago
                 X_prev = df_clean[available_cols].iloc[-31:-16].values
                 if len(X_prev) >= 10:
                     try:
@@ -896,11 +885,10 @@ for idx, coin in enumerate(COINS):
                         
                         prev_predicted_price = prev_price * (1 + (prev_prob - 0.5) * 0.02)
                         
-                        # Determine if the prediction was correct
                         actual_change_pct = ((current_price - prev_price) / prev_price) * 100
                         if prev_direction == "UP" and actual_change_pct > 0:
                             win = True
-                            pnl = BET_SIZE * 0.95  # 5% fee
+                            pnl = BET_SIZE * 0.95
                         elif prev_direction == "DOWN" and actual_change_pct < 0:
                             win = True
                             pnl = BET_SIZE * 0.95
@@ -912,7 +900,6 @@ for idx, coin in enumerate(COINS):
                             pnl = 0
                         
                         if prev_direction != "WAIT" and win is not None:
-                            # Record settlement
                             settlement_tracker.add_settlement(
                                 coin=coin,
                                 settlement_time=prev_time,
@@ -998,10 +985,9 @@ st.markdown("### 📊 Previous Settlement Results")
 st.caption("What would have happened if you placed a $10 bet on the model's last prediction")
 
 if settlement_results:
-    # Create a summary table
     df_settlement = pd.DataFrame(settlement_results)
     
-    # Add color-coded styling
+    # --- FIXED: Use map() instead of applymap() for pandas 2.1+ ---
     def color_result(val):
         if 'WIN' in str(val):
             return 'color: #00b894; font-weight: bold'
@@ -1011,15 +997,23 @@ if settlement_results:
     
     def color_pnl(val):
         if isinstance(val, str) and '$' in val:
-            num = float(val.replace('$', '').replace(',', ''))
-            if num > 0:
-                return 'color: #00b894; font-weight: bold'
-            elif num < 0:
-                return 'color: #ff6b6b; font-weight: bold'
+            try:
+                num = float(val.replace('$', '').replace(',', ''))
+                if num > 0:
+                    return 'color: #00b894; font-weight: bold'
+                elif num < 0:
+                    return 'color: #ff6b6b; font-weight: bold'
+            except:
+                pass
         return ''
     
-    styled_settlement = df_settlement.style.applymap(color_result, subset=['Result'])
-    styled_settlement = styled_settlement.applymap(color_pnl, subset=['P&L'])
+    # Try map() first (pandas 2.1+), fallback to applymap()
+    try:
+        styled_settlement = df_settlement.style.map(color_result, subset=['Result'])
+        styled_settlement = styled_settlement.map(color_pnl, subset=['P&L'])
+    except AttributeError:
+        styled_settlement = df_settlement.style.applymap(color_result, subset=['Result'])
+        styled_settlement = styled_settlement.applymap(color_pnl, subset=['P&L'])
     
     st.dataframe(styled_settlement, use_container_width=True, hide_index=True)
     
@@ -1338,7 +1332,6 @@ with st.sidebar:
     ✅ **Win/Loss Tracking** — ✅ WIN or ❌ LOSS for each prediction  
     ✅ **Accuracy Tracker** — Running win rate and P&L statistics  
     ✅ **Per-Coin Performance** — See which coins your model predicts best  
-    ✅ **All Code 5.2 Features** — Contract targets, order book, depth slope  
     """)
     
     st.divider()
