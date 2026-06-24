@@ -1,8 +1,9 @@
 # ============================================
-# CODE 7: KALSHI EDGE DETECTOR WITH PROJECTION CHART (15-MINUTE)
+# CODE 7: KALSHI EDGE DETECTOR WITH PROJECTION CHART (FIXED)
 # Features: All Code 5 Features + Real-time 15-Minute Projection Chart
 #           Model Projected Price vs. Actual Price
 #           Current Time Overlay | Signal Annotations
+#           FIXED: Added return_1, return_5 columns
 # ============================================
 
 import streamlit as st
@@ -157,7 +158,7 @@ BANKROLL = 100.00
 MAX_RISK_PER_TRADE = 0.02
 MIN_EDGE = 0.05
 FLAT_THRESHOLD = 0.002
-PREDICT_WINDOW = 15  # <--- 15-MINUTE PREDICTION
+PREDICT_WINDOW = 15  # 15-MINUTE PREDICTION
 
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
@@ -335,56 +336,82 @@ def fetch_fear_greed_index():
     except:
         return {'value': 50, 'classification': 'Neutral'}
 
-# --- Feature Engineering ---
+# --- Feature Engineering (FIXED) ---
 def add_advanced_features(df):
-    """Add comprehensive technical indicators"""
+    """Add comprehensive technical indicators with ALL required columns"""
     
+    # --- FIXED: Add return_1 and return_5 FIRST ---
+    df['return_1'] = df['close'].pct_change()
+    df['return_5'] = df['close'].pct_change(5)
+    df['return_10'] = df['close'].pct_change(10)
+    
+    # --- 1. LOG RETURNS ---
     df['log_return'] = np.log(df['close'] / df['close'].shift(1))
-    df['abs_log_return'] = df['log_return'].abs()
+    df['log_return_5'] = np.log(df['close'] / df['close'].shift(5))
+    df['log_return_10'] = np.log(df['close'] / df['close'].shift(10))
     
+    # --- 2. ABSOLUTE FEATURES ---
+    df['abs_log_return'] = df['log_return'].abs()
+    df['abs_log_return_5'] = df['log_return_5'].abs()
+    df['abs_log_return_10'] = df['log_return_10'].abs()
+    
+    # --- 3. LAG FEATURES ---
     df['lag_1'] = df['close'].shift(1)
     df['lag_5'] = df['close'].shift(5)
+    df['lag_10'] = df['close'].shift(10)
+    df['lag_volume'] = df['volume'].shift(1)
     
+    # --- 4. VOLATILITY FEATURES ---
     df['volatility_5'] = df['return_1'].rolling(5).std()
     df['volatility_10'] = df['return_1'].rolling(10).std()
     df['volatility_ratio'] = df['volatility_5'] / (df['volatility_10'] + 0.001)
     
+    # --- 5. MOVING AVERAGES ---
     df['sma_5'] = df['close'].rolling(5).mean()
     df['sma_10'] = df['close'].rolling(10).mean()
     df['sma_20'] = df['close'].rolling(20).mean()
+    df['sma_50'] = df['close'].rolling(50).mean()
     df['ema_9'] = df['close'].ewm(span=9).mean()
     df['ema_21'] = df['close'].ewm(span=21).mean()
     
+    # --- 6. RSI ---
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
+    # --- 7. MACD ---
     df['macd'] = df['close'].ewm(span=12).mean() - df['close'].ewm(span=26).mean()
     df['macd_signal'] = df['macd'].ewm(span=9).mean()
     df['macd_hist'] = df['macd'] - df['macd_signal']
     
+    # --- 8. BOLLINGER BANDS ---
     df['bb_middle'] = df['close'].rolling(20).mean()
     bb_std = df['close'].rolling(20).std()
     df['bb_upper'] = df['bb_middle'] + 2 * bb_std
     df['bb_lower'] = df['bb_middle'] - 2 * bb_std
     df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
     
+    # --- 9. ATR ---
     df['atr'] = (df['high'] - df['low']).rolling(14).mean()
     
+    # --- 10. STOCHASTIC OSCILLATOR ---
     low_min = df['low'].rolling(14).min()
     high_max = df['high'].rolling(14).max()
     df['stoch_k'] = 100 * ((df['close'] - low_min) / (high_max - low_min + 0.001))
     df['stoch_d'] = df['stoch_k'].rolling(3).mean()
     
+    # --- 11. WILLIAMS %R ---
     df['williams_r'] = -100 * ((high_max - df['close']) / (high_max - low_min + 0.001))
     
+    # --- 12. CCI ---
     tp = (df['high'] + df['low'] + df['close']) / 3
     sma_tp = tp.rolling(20).mean()
     mad_tp = tp.rolling(20).apply(lambda x: np.mean(np.abs(x - np.mean(x))))
     df['cci'] = (tp - sma_tp) / (0.015 * mad_tp + 0.001)
     
+    # --- 13. MFI ---
     typical_price = (df['high'] + df['low'] + df['close']) / 3
     money_flow = typical_price * df['volume']
     positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0).rolling(14).sum()
@@ -392,6 +419,7 @@ def add_advanced_features(df):
     mfi_ratio = positive_flow / (negative_flow + 0.001)
     df['mfi'] = 100 - (100 / (1 + mfi_ratio))
     
+    # --- 14. ADX ---
     tr = np.maximum(df['high'] - df['low'], 
                     np.maximum(abs(df['high'] - df['close'].shift(1)), 
                               abs(df['low'] - df['close'].shift(1))))
@@ -409,17 +437,17 @@ def add_advanced_features(df):
     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 0.001)
     df['adx'] = dx.rolling(14).mean()
     
+    # --- 15. PRICE FEATURES ---
     df['price_range'] = (df['high'] - df['low']) / df['close']
+    df['high_low_ratio'] = df['high'] / df['low']
+    df['close_open_ratio'] = df['close'] / df['open']
     df['volume_ratio'] = df['volume'] / df['volume'].rolling(10).mean()
     
     return df
 
 # --- Get Model Projections Over Time ---
 def get_price_projections(df_clean, feature_cols, predict_window=15):
-    """
-    Generate price projections for each timestamp in the data.
-    Returns: DataFrame with time, actual_price, projected_price, confidence
-    """
+    """Generate price projections for each timestamp in the data."""
     if len(df_clean) < 100:
         return pd.DataFrame()
     
@@ -429,15 +457,10 @@ def get_price_projections(df_clean, feature_cols, predict_window=15):
     
     projections = []
     
-    # Train a model and project for each time step
     for i in range(100, len(df_clean) - predict_window):
-        # Training data: up to current time
         train_data = df_clean.iloc[:i]
-        
-        # Current time data for prediction
         current_data = df_clean.iloc[i]
         
-        # Features and target for training
         X_train = train_data[available_cols].values
         y_train = train_data['close'].shift(-predict_window) > train_data['close']
         
@@ -451,28 +474,22 @@ def get_price_projections(df_clean, feature_cols, predict_window=15):
         X_train_clean = X_train_df_clean[available_cols].values
         y_train_clean = y_train.iloc[:len(X_train_df_clean)].values.astype(int)
         
-        # Train model
         scaler = RobustScaler()
         X_scaled = scaler.fit_transform(X_train_clean)
         
-        model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
+        model = RandomForestClassifier(n_estimators=30, max_depth=5, random_state=42)
         model.fit(X_scaled, y_train_clean)
         
-        # Predict for current time
         current_features = current_data[available_cols].values.reshape(1, -1)
         current_scaled = scaler.transform(current_features)
         win_prob = model.predict_proba(current_scaled)[0][1]
         
-        # Calculate projected price
         current_price = current_data['close']
         if win_prob > 0.5:
-            # If model says price will go up, project price increase
-            projected_price = current_price * (1 + (win_prob - 0.5) * 0.02)  # 2% max increase
+            projected_price = current_price * (1 + (win_prob - 0.5) * 0.02)
         else:
-            # If model says price will go down, project price decrease
-            projected_price = current_price * (1 - (0.5 - win_prob) * 0.02)  # 2% max decrease
+            projected_price = current_price * (1 - (0.5 - win_prob) * 0.02)
         
-        # Determine signal
         edge = win_prob - 0.50
         if edge >= MIN_EDGE and win_prob > 0.55:
             signal = "BUY YES"
@@ -519,7 +536,6 @@ selected_coin_display = st.selectbox(
     [f"{COIN_METADATA[coin]['name']} ({COIN_METADATA[coin]['symbol']})" for coin in COINS]
 )
 
-# Get the selected coin symbol
 selected_coin = None
 for coin in COINS:
     if f"{COIN_METADATA[coin]['name']} ({COIN_METADATA[coin]['symbol']})" == selected_coin_display:
@@ -528,7 +544,6 @@ for coin in COINS:
 
 if selected_coin:
     try:
-        # Fetch data
         df = fetch_yahoo_data(selected_coin, period='2d')
         if not df.empty:
             df = add_advanced_features(df)
@@ -544,11 +559,9 @@ if selected_coin:
                     'price_range', 'volume_ratio'
                 ]
                 
-                # Get projections over time
                 projections_df = get_price_projections(df_clean, feature_cols, predict_window=15)
                 
                 if not projections_df.empty:
-                    # Create the chart
                     fig = make_subplots(
                         rows=2, cols=1,
                         shared_xaxes=True,
@@ -557,7 +570,6 @@ if selected_coin:
                         subplot_titles=("Price Projection vs Actual", "Confidence & Signals")
                     )
                     
-                    # Actual price line
                     fig.add_trace(
                         go.Scatter(
                             x=projections_df['time'],
@@ -569,7 +581,6 @@ if selected_coin:
                         row=1, col=1
                     )
                     
-                    # Projected price line
                     fig.add_trace(
                         go.Scatter(
                             x=projections_df['time'],
@@ -581,7 +592,6 @@ if selected_coin:
                         row=1, col=1
                     )
                     
-                    # Add signal markers
                     signal_up = projections_df[projections_df['signal'] == 'BUY YES']
                     signal_down = projections_df[projections_df['signal'] == 'BUY NO']
                     
@@ -592,11 +602,7 @@ if selected_coin:
                                 y=signal_up['actual_price'],
                                 mode='markers',
                                 name='BUY YES Signal',
-                                marker=dict(
-                                    color='#00b894',
-                                    size=12,
-                                    symbol='triangle-up'
-                                )
+                                marker=dict(color='#00b894', size=12, symbol='triangle-up')
                             ),
                             row=1, col=1
                         )
@@ -608,16 +614,11 @@ if selected_coin:
                                 y=signal_down['actual_price'],
                                 mode='markers',
                                 name='BUY NO Signal',
-                                marker=dict(
-                                    color='#ff6b6b',
-                                    size=12,
-                                    symbol='triangle-down'
-                                )
+                                marker=dict(color='#ff6b6b', size=12, symbol='triangle-down')
                             ),
                             row=1, col=1
                         )
                     
-                    # Confidence line (row 2)
                     fig.add_trace(
                         go.Scatter(
                             x=projections_df['time'],
@@ -629,7 +630,6 @@ if selected_coin:
                         row=2, col=1
                     )
                     
-                    # Edge line (row 2)
                     fig.add_trace(
                         go.Scatter(
                             x=projections_df['time'],
@@ -641,38 +641,17 @@ if selected_coin:
                         row=2, col=1
                     )
                     
-                    # Add horizontal line at 50% for confidence
                     fig.add_hline(y=50, line_dash="dash", line_color="gray", row=2, col=1)
                     
-                    # Add current time vertical line
                     current_time = datetime.now()
-                    fig.add_vline(
-                        x=current_time,
-                        line_dash="dash",
-                        line_color="white",
-                        opacity=0.5,
-                        row=1, col=1
-                    )
-                    fig.add_vline(
-                        x=current_time,
-                        line_dash="dash",
-                        line_color="white",
-                        opacity=0.5,
-                        row=2, col=1
-                    )
+                    fig.add_vline(x=current_time, line_dash="dash", line_color="white", opacity=0.5, row=1, col=1)
+                    fig.add_vline(x=current_time, line_dash="dash", line_color="white", opacity=0.5, row=2, col=1)
                     
-                    # Update layout
                     fig.update_layout(
                         height=600,
                         template='plotly_dark',
                         showlegend=True,
-                        legend=dict(
-                            orientation="h",
-                            yanchor="bottom",
-                            y=1.02,
-                            xanchor="right",
-                            x=1
-                        ),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                         margin=dict(l=0, r=0, t=30, b=0)
                     )
                     
@@ -682,7 +661,6 @@ if selected_coin:
                     
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # Show current projection stats
                     latest = projections_df.iloc[-1]
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Current Price", f"${latest['actual_price']:.2f}")
@@ -735,7 +713,6 @@ for idx, coin in enumerate(COINS):
         if len(available_cols) < 10:
             continue
         
-        # Train model for current prediction
         X = df_clean[available_cols].values
         y = df_clean['close'].shift(-PREDICT_WINDOW) > df_clean['close']
         
