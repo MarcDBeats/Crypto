@@ -2,6 +2,7 @@
 # CODE 5: CLEAN PRO KALSHI EDGE DETECTOR
 # Features: Order Book (10 Levels) | Microprice | Imbalance
 #           Spread Quality | Market Regime | Ternary Classification
+#           DEPTH SLOPE ANALYSIS (included)
 #           No Auto-Refresh | No Backtesting
 # ============================================
 
@@ -156,32 +157,12 @@ st.markdown("""
         color: #fdcb6e;
         font-weight: 600;
     }
-    .signal-summary {
-        background: linear-gradient(135deg, #1e1e2f 0%, #2d2d44 100%);
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border: 1px solid #3d3d5c;
-        margin-bottom: 1rem;
-    }
-    .trade-button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 0.5rem 1rem;
-        border-radius: 0.5rem;
-        text-decoration: none;
-        font-weight: 600;
-        display: inline-block;
-        margin-top: 0.3rem;
-    }
-    .trade-button:hover {
-        opacity: 0.8;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
 st.markdown('<div class="main-header">📊 Kalshi Edge Detector Pro</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Order Book (10 Levels) • Microprice • Market Regime • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Order Book (10 Levels) • Microprice • Depth Slope • Market Regime • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
 BANKROLL = 100.00
@@ -293,13 +274,22 @@ def fetch_kalshi_order_book(ticker, depth=10):
         ask_qty = no_vol_10 if no_vol_10 > 0 else 1
         microprice = (best_yes_bid * ask_qty + best_no_bid * bid_qty) / (bid_qty + ask_qty) if (bid_qty + ask_qty) > 0 else 0.50
         
-        # Depth slope
+        # --- DEPTH SLOPE ANALYSIS ---
+        # Measures if depth is concentrated at top or spread across levels
         if len(yes_bids) >= 5:
             top_depth = float(yes_bids[0][1]) if yes_bids else 0
             avg_depth_5 = sum([float(p[1]) for p in yes_bids[:5]]) / 5 if len(yes_bids) >= 5 else 1
             depth_slope = top_depth / avg_depth_5 if avg_depth_5 > 0 else 1
         else:
             depth_slope = 1
+        
+        # Depth slope interpretation
+        if depth_slope > 1.5:
+            depth_slope_label = "🔴 Top-Heavy"
+        elif depth_slope > 0.9:
+            depth_slope_label = "🟡 Balanced"
+        else:
+            depth_slope_label = "🟢 Bottom-Heavy"
         
         # Liquidity score
         spread_score = max(0, min(1, 1 - (spread / 0.10)))
@@ -331,6 +321,7 @@ def fetch_kalshi_order_book(ticker, depth=10):
             'imbalance_10': imbalance_10,
             'microprice': microprice,
             'depth_slope': depth_slope,
+            'depth_slope_label': depth_slope_label,
             'liquidity_score': liquidity_score,
             'liquidity_label': liquidity_label,
             'liquidity_class': liquidity_class,
@@ -351,6 +342,7 @@ def fetch_kalshi_order_book(ticker, depth=10):
             'imbalance_10': 0,
             'microprice': 0.50,
             'depth_slope': 1,
+            'depth_slope_label': '🟡 Balanced',
             'liquidity_score': 0,
             'liquidity_label': '🔴 Low',
             'liquidity_class': 'liquidity-low',
@@ -543,6 +535,7 @@ for idx, coin in enumerate(COINS):
         imbalance_10 = order_book.get('imbalance_10', 0)
         microprice = order_book.get('microprice', 0.50)
         depth_slope = order_book.get('depth_slope', 1)
+        depth_slope_label = order_book.get('depth_slope_label', '🟡 Balanced')
         depth = order_book.get('depth', 0)
         yes_volume = order_book.get('yes_volume', 0)
         no_volume = order_book.get('no_volume', 0)
@@ -640,6 +633,7 @@ for idx, coin in enumerate(COINS):
             'Microprice_Str': f"{microprice:.3f}",
             'Depth_Slope': depth_slope,
             'Depth_Slope_Str': f"{depth_slope:.2f}",
+            'Depth_Slope_Label': depth_slope_label,
             'Liquidity': liquidity_label,
             'Liquidity_Score': liquidity_score,
             'Depth': depth,
@@ -681,35 +675,6 @@ progress_bar.empty()
 # ============================================
 # 📊 DASHBOARD DISPLAY
 # ============================================
-
-# --- SIGNAL SUMMARY BAR ---
-st.markdown("---")
-
-signals_5m = len([r for r in all_results if r['Is_Signal_5m']])
-signals_15m = len([r for r in all_results if r['Is_Signal_15m']])
-best_bet = best_bets[0] if best_bets else None
-
-st.markdown("### 📊 Quick Summary")
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    if best_bet:
-        st.metric("⭐ Best Bet", f"{best_bet['Name']} — {best_bet['Direction_5m']}", delta=f"Edge: {best_bet['Edge_5m_Str']}")
-    else:
-        st.metric("⭐ Best Bet", "None", delta="Waiting...")
-
-with col2:
-    st.metric("📊 5m Signals", signals_5m, delta=f"{signals_5m} signals")
-
-with col3:
-    st.metric("📊 15m Signals", signals_15m, delta=f"{signals_15m} signals")
-
-with col4:
-    avg_liquidity = np.mean([r['Liquidity_Score'] for r in all_results]) if all_results else 0.5
-    health_score = min(100, max(0, (avg_liquidity * 100) + 30))
-    st.metric("💪 Market Health", f"{health_score:.0f}/100", delta="Good" if health_score > 60 else "Caution")
-
-st.divider()
 
 # --- Market Regime Banner ---
 if all_results:
@@ -769,10 +734,6 @@ for i, result in enumerate(all_results):
                 dir_display = "⏳ WAIT"
                 dir_color = "#888"
             
-            # Kalshi trade link
-            ticker = KALSHI_TICKERS.get(f"{result['Name']}-USD", "")
-            trade_link = f"https://kalshi.com/market/{ticker}" if ticker else "#"
-            
             st.markdown(f"""
             <div class="metric-card">
                 <div class="coin-name">{result['Name']} ({result['Symbol']})</div>
@@ -799,32 +760,17 @@ for i, result in enumerate(all_results):
                 <div class="coin-stats">
                     Liquidity: {result['Liquidity']} | Spread: {result['Spread_Quality']}
                 </div>
-                <a href="{trade_link}" target="_blank" class="trade-button">🚀 Trade on Kalshi</a>
+                <div class="coin-stats">
+                    Depth Slope: {result['Depth_Slope_Str']} ({result['Depth_Slope_Label']})
+                </div>
             </div>
             """, unsafe_allow_html=True)
 
 st.divider()
 
-# --- Quick Filter Buttons ---
-st.markdown("### 📈 Detailed Edge Analysis")
-filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([1, 1, 1, 3])
-with filter_col1:
-    show_all = st.button("🔴 Show All", key="show_all")
-with filter_col2:
-    show_signals = st.button("🟢 Signals Only", key="show_signals")
-with filter_col3:
-    show_best = st.button("⭐ Best Bets", key="show_best")
-
-# Default filter
-filter_option = "all"
-if show_signals:
-    filter_option = "signals"
-elif show_best:
-    filter_option = "best"
-elif show_all:
-    filter_option = "all"
-
 # --- Detailed Table ---
+st.markdown("### 📈 Detailed Edge Analysis (with Order Book Data)")
+
 if all_results:
     df_display = pd.DataFrame([{
         'Coin': r['Name'],
@@ -836,6 +782,8 @@ if all_results:
         'Imbalance (5)': r['Imbalance_5_Str'],
         'Imbalance (10)': r['Imbalance_10_Str'],
         'Microprice': r['Microprice_Str'],
+        'Depth Slope': r['Depth_Slope_Str'],
+        'Depth Slope Label': r['Depth_Slope_Label'],
         'Liquidity': r['Liquidity'],
         'Regime': r['Regime'],
         'Model 5m': r['Prob_5m_Str'],
@@ -847,14 +795,6 @@ if all_results:
         '5m Change': f"{r['Change_5m']:+.1f}%",
         '15m Change': f"{r['Change_15m']:+.1f}%"
     } for r in all_results])
-    
-    # Apply filter
-    if filter_option == "signals":
-        df_display = df_display[df_display['Decision 5m'] != 'SKIP']
-        st.info("🟢 Showing only coins with signals.")
-    elif filter_option == "best":
-        df_display = df_display[df_display['Decision 5m'].isin(['BUY YES', 'BUY NO'])]
-        st.success("⭐ Showing only Best Bets.")
     
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
@@ -894,9 +834,6 @@ if best_bets:
         else:
             continue
         
-        ticker = KALSHI_TICKERS.get(f"{bet['Name']}-USD", "")
-        trade_link = f"https://kalshi.com/market/{ticker}" if ticker else "#"
-        
         with col:
             st.markdown(f"""
             <div class="{card_class}">
@@ -917,7 +854,9 @@ if best_bets:
                     <span>Spread: {bet['Spread_Str']}</span>
                     <span>Liquidity: {bet['Liquidity']}</span>
                 </div>
-                <a href="{trade_link}" target="_blank" class="trade-button" style="font-size: 0.8rem;">🚀 Trade Now</a>
+                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
+                    <span>Depth Slope: {bet['Depth_Slope_Str']} ({bet['Depth_Slope_Label']})</span>
+                </div>
             </div>
             """, unsafe_allow_html=True)
 else:
@@ -948,25 +887,16 @@ with st.sidebar:
     ✅ **Enhanced Liquidity Score**  
     ✅ **Market Regime Banner**  
     ✅ **Ternary Classification** (UP/DOWN/FLAT)  
-    ✅ **Depth Slope Analysis**  
-    ✅ **One-Click Kalshi Links**  
-    ✅ **Quick Filter Buttons**  
-    ✅ **Signal Summary Bar**  
+    ✅ **Depth Slope Analysis** ← NEW  
     """)
     
     st.divider()
     
-    st.markdown("### 🎯 How It Works")
+    st.markdown("### 🎯 Depth Slope Interpretation")
     st.markdown("""
-    1. **Model Estimate** — Enhanced ML predicts probability  
-    2. **Kalshi Price** — Market's implied probability  
-    3. **Order Book** — 10 levels of bid/ask data  
-    4. **Microstructure Features** — Imbalance, Microprice, Depth  
-    5. **Ternary Classification** — UP if edge > threshold, DOWN if edge < -threshold, FLAT otherwise  
-    6. **Decision**:
-       - Edge > 5% → **BUY YES**
-       - Edge < -5% → **BUY NO**
-       - Otherwise → **SKIP** or **FLAT**
+    **🔴 Top-Heavy (>1.5):** Depth concentrated at best bid — potential pullback risk  
+    **🟡 Balanced (0.9-1.5):** Healthy order book distribution  
+    **🟢 Bottom-Heavy (<0.9):** Stronger support at deeper levels  
     """)
     
     st.divider()
@@ -986,4 +916,4 @@ with st.sidebar:
 
 # --- Footer ---
 st.divider()
-st.caption(f"⚡ Code 5 • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} • Order Book (10 Levels) • Microprice")
+st.caption(f"⚡ Code 5 • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} • Order Book (10 Levels) • Depth Slope • Microprice")
