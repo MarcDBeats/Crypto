@@ -3,6 +3,7 @@
 # Behind the scenes: All Code 5 metrics (order book, depth slope, liquidity, etc.)
 # Dashboard: Clean view with price predictions, countdown, and best bets
 # Trading window: Only shows signals within 5 minutes of settlement
+# ALL TIMES IN CENTRAL TIME (TEXAS)
 # ============================================
 
 import streamlit as st
@@ -17,6 +18,32 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.ensemble import RandomForestClassifier
 import warnings
 warnings.filterwarnings('ignore')
+
+# --- TIME ZONE SETUP (TEXAS / CENTRAL TIME) ---
+import pytz
+
+# Set your local time zone to Central Time (Texas)
+LOCAL_TZ = pytz.timezone('America/Chicago')
+
+def get_current_ct_time():
+    """Get current Central Time (Texas)"""
+    return datetime.now(LOCAL_TZ)
+
+def get_next_kalshi_settlement():
+    """Get the next :00, :15, :30, :45 mark in Central Time"""
+    now = get_current_ct_time()
+    minute = now.minute
+    seconds = now.second
+    
+    # Calculate minutes to next settlement
+    minutes_to_next = (15 - (minute % 15)) % 15
+    if minutes_to_next == 0 and seconds == 0:
+        minutes_to_next = 15
+    
+    next_settlement = now + timedelta(minutes=minutes_to_next)
+    next_settlement = next_settlement.replace(second=0, microsecond=0)
+    
+    return next_settlement, minutes_to_next
 
 # --- Page Config ---
 st.set_page_config(
@@ -157,12 +184,22 @@ st.markdown("""
         font-size: 0.7rem;
         color: #888;
     }
+    .ct-badge {
+        background: #fdcb6e33;
+        color: #fdcb6e;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.3rem;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: inline-block;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
+current_ct = get_current_ct_time()
 st.markdown('<div class="main-header">📊 Kalshi Price Predictor</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Full data model • Clean dashboard • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Full data model • Clean dashboard • All times in CT • Updated: {current_ct.strftime('%Y-%m-%d %H:%M:%S')} CT")
 
 # --- Settings ---
 BANKROLL = 100.00
@@ -192,16 +229,6 @@ COIN_METADATA = {
 }
 
 # --- Helper Functions ---
-def get_next_kalshi_settlement():
-    now = datetime.now()
-    minute = now.minute
-    minutes_to_next = (15 - (minute % 15)) % 15
-    if minutes_to_next == 0:
-        minutes_to_next = 15
-    next_settlement = now + timedelta(minutes=minutes_to_next)
-    next_settlement = next_settlement.replace(second=0, microsecond=0)
-    return next_settlement, minutes_to_next
-
 def fmt_price(val):
     if val is None or pd.isna(val):
         return '—'
@@ -447,7 +474,7 @@ def get_settlement_prediction(coin_symbol):
         
         current_price = df_clean['close'].iloc[-1]
         
-        # Get minutes to next settlement
+        # Get minutes to next settlement (in CT)
         _, minutes_until = get_next_kalshi_settlement()
         if minutes_until > PREDICT_WINDOW + 5:
             minutes_until = 15
@@ -557,10 +584,10 @@ def get_settlement_prediction(coin_symbol):
 next_settlement, minutes_until = get_next_kalshi_settlement()
 is_active = minutes_until <= PREDICT_WINDOW
 
-# --- Countdown Timer ---
+# --- Countdown Timer (with CT badge) ---
 st.markdown(f"""
 <div class="countdown">
-    <div class="label">⏰ Next Settlement</div>
+    <div class="label">⏰ Next Settlement <span class="ct-badge">CT</span></div>
     <div class="timer">{minutes_until}m</div>
     <div class="label">{next_settlement.strftime('%I:%M %p')} CT</div>
     <div style="margin-top: 0.5rem; font-size: 1rem; color: {'#00b894' if is_active else '#636e72'};">
@@ -571,10 +598,10 @@ st.markdown(f"""
 
 # --- Status Message ---
 if is_active:
-    st.success(f"🟢 Trading window is OPEN! {minutes_until} minutes until settlement.")
+    st.success(f"🟢 Trading window is OPEN! {minutes_until} minutes until settlement (CT).")
     st.caption("You can place trades based on the predictions below.")
 else:
-    st.warning(f"⏳ Trading window closed. Next window opens in {minutes_until - PREDICT_WINDOW} minutes.")
+    st.warning(f"⏳ Trading window closed. Next window opens in {minutes_until - PREDICT_WINDOW} minutes (CT).")
     st.caption("Predictions shown for reference only. Wait for the trading window to open.")
 
 st.divider()
@@ -740,6 +767,8 @@ st.divider()
 # --- How It Works ---
 st.markdown("### 📖 How This Works")
 st.markdown("""
+**Time Zone**: All times displayed in **Central Time (CT)** — Texas time.
+
 **Trading Window**: Only trades are shown when you're within **5 minutes** of the next Kalshi settlement.
 
 **What's Happening Behind the Scenes**:
@@ -766,6 +795,7 @@ st.divider()
 # --- Sidebar ---
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
+    st.markdown(f"**Time Zone:** Central Time (CT)")
     st.markdown(f"**Trading Window:** {PREDICT_WINDOW} minutes before settlement")
     st.markdown(f"**Min Edge:** {MIN_EDGE*100:.0f}%")
     st.markdown(f"**Current Window:** {'🟢 Open' if is_active else '🔴 Closed'}")
@@ -787,4 +817,4 @@ with st.sidebar:
     st.caption("Click refresh in your browser to update data")
 
 # --- Footer ---
-st.caption(f"⚡ Code 7 • Full data model • Clean dashboard • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Code 7 • Full data model • Clean dashboard • All times in CT • Last updated: {get_current_ct_time().strftime('%Y-%m-%d %H:%M:%S')} CT")
