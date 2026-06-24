@@ -1,9 +1,7 @@
 # ============================================
-# CODE 5: CLEAN PRO KALSHI EDGE DETECTOR
-# Features: Order Book (10 Levels) | Microprice | Imbalance
-#           Spread Quality | Market Regime | Ternary Classification
-#           DEPTH SLOPE ANALYSIS (included)
-#           No Auto-Refresh | No Backtesting
+# CODE 5.1: KALSHI EDGE DETECTOR WITH CONTRACT TARGETS
+# Features: All Code 5 Features + Next Contract Projections
+#           :00, :15, :30, :45 targets with price projections
 # ============================================
 
 import streamlit as st
@@ -14,6 +12,8 @@ from datetime import datetime, timedelta
 import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from sklearn.preprocessing import RobustScaler
+from sklearn.ensemble import RandomForestClassifier
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -42,7 +42,7 @@ st.markdown("""
         border-radius: 0.5rem;
         border: 1px solid #3d3d5c;
         text-align: center;
-        min-height: 200px;
+        min-height: 180px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -58,7 +58,7 @@ st.markdown("""
         margin: 0.3rem 0;
     }
     .metric-card .edge-display {
-        font-size: 1.3rem;
+        font-size: 1.2rem;
         font-weight: 700;
         margin: 0.3rem 0;
     }
@@ -120,11 +120,6 @@ st.markdown("""
         border: 2px solid #fdcb6e;
         color: #fdcb6e;
     }
-    .regime-deep {
-        background: #667eea33;
-        border: 2px solid #667eea;
-        color: #667eea;
-    }
     .liquidity-high {
         color: #00b894;
         font-weight: 700;
@@ -136,10 +131,6 @@ st.markdown("""
     .liquidity-low {
         color: #ff6b6b;
         font-weight: 700;
-    }
-    .stDataFrame {
-        border-radius: 0.5rem;
-        overflow: hidden;
     }
     .spread-excellent {
         color: #00b894;
@@ -153,26 +144,65 @@ st.markdown("""
         color: #ff6b6b;
         font-weight: 700;
     }
-    .flat-class {
-        color: #fdcb6e;
+    .contract-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%);
+        padding: 0.8rem;
+        border-radius: 0.5rem;
+        border: 1px solid #3d3d5c;
+        text-align: center;
+        margin: 0.2rem 0;
+    }
+    .contract-card .time-label {
+        font-size: 0.8rem;
+        color: #888;
+    }
+    .contract-card .direction {
+        font-size: 1.2rem;
+        font-weight: 700;
+    }
+    .contract-card .target-price {
+        font-size: 1rem;
         font-weight: 600;
+        color: #ccc;
+    }
+    .contract-card .confidence-bar {
+        height: 4px;
+        border-radius: 2px;
+        margin-top: 0.3rem;
+        background: #2d2d44;
+    }
+    .contract-card .confidence-fill {
+        height: 100%;
+        border-radius: 2px;
+        transition: width 0.5s;
+    }
+    .direction-up {
+        color: #00b894;
+    }
+    .direction-down {
+        color: #ff6b6b;
+    }
+    .direction-wait {
+        color: #fdcb6e;
+    }
+    .direction-flat {
+        color: #636e72;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
 st.markdown('<div class="main-header">📊 Kalshi Edge Detector Pro</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Order Book (10 Levels) • Microprice • Depth Slope • Market Regime • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Code 5.1 • Kalshi Contract Targets • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
 BANKROLL = 100.00
 MAX_RISK_PER_TRADE = 0.02
 MIN_EDGE = 0.05
-FLAT_THRESHOLD = 0.002  # 0.2% price change threshold for ternary classification
+FLAT_THRESHOLD = 0.002
 
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
-# Kalshi ticker mapping
 KALSHI_TICKERS = {
     'BTC-USD': 'KXBT',
     'ETH-USD': 'KXETH',
@@ -213,6 +243,24 @@ def fetch_yahoo_data(symbol):
         return pd.DataFrame()
 
 @st.cache_data(ttl=10)
+def fetch_macro_data():
+    try:
+        spy = yf.Ticker("SPY").history(period='5d', interval='1m')
+        vix = yf.Ticker("^VIX").history(period='5d', interval='1m')
+        dxy = yf.Ticker("DX-Y.NYB").history(period='5d', interval='1m')
+        
+        macro = {
+            'spy_close': spy['Close'].iloc[-1] if not spy.empty else 0,
+            'vix_close': vix['Close'].iloc[-1] if not vix.empty else 0,
+            'dxy_close': dxy['Close'].iloc[-1] if not dxy.empty else 0,
+            'spy_change': spy['Close'].pct_change().iloc[-1] if len(spy) > 1 else 0,
+            'vix_change': vix['Close'].pct_change().iloc[-1] if len(vix) > 1 else 0
+        }
+        return macro
+    except:
+        return {'spy_close': 0, 'vix_close': 0, 'dxy_close': 0, 'spy_change': 0, 'vix_change': 0}
+
+@st.cache_data(ttl=10)
 def fetch_kalshi_price(ticker):
     try:
         url = f"https://external-api.kalshi.com/trade-api/v2/markets/{ticker}"
@@ -234,7 +282,6 @@ def fetch_kalshi_price(ticker):
 
 @st.cache_data(ttl=5)
 def fetch_kalshi_order_book(ticker, depth=10):
-    """Fetch full order book data with depth levels"""
     try:
         url = f"https://external-api.kalshi.com/trade-api/v2/markets/{ticker}/orderbook?depth={depth}"
         response = requests.get(url, timeout=5)
@@ -249,33 +296,17 @@ def fetch_kalshi_order_book(ticker, depth=10):
         
         spread = best_yes_bid - best_no_bid if best_yes_bid and best_no_bid else 0
         
-        # Spread quality
         if spread < 0.02:
             spread_quality = "🟢 Excellent"
-            spread_class = "spread-excellent"
         elif spread < 0.05:
             spread_quality = "🟡 Good"
-            spread_class = "spread-good"
         else:
             spread_quality = "🔴 Poor"
-            spread_class = "spread-poor"
-        
-        # Multi-level imbalance
-        yes_vol_5 = sum([float(p[1]) for p in yes_bids[:5]]) if yes_bids else 0
-        no_vol_5 = sum([float(p[1]) for p in no_bids[:5]]) if no_bids else 0
-        imbalance_5 = (yes_vol_5 - no_vol_5) / (yes_vol_5 + no_vol_5 + 1) if (yes_vol_5 + no_vol_5) > 0 else 0
         
         yes_vol_10 = sum([float(p[1]) for p in yes_bids[:10]]) if yes_bids else 0
         no_vol_10 = sum([float(p[1]) for p in no_bids[:10]]) if no_bids else 0
         imbalance_10 = (yes_vol_10 - no_vol_10) / (yes_vol_10 + no_vol_10 + 1) if (yes_vol_10 + no_vol_10) > 0 else 0
         
-        # Microprice
-        bid_qty = yes_vol_10 if yes_vol_10 > 0 else 1
-        ask_qty = no_vol_10 if no_vol_10 > 0 else 1
-        microprice = (best_yes_bid * ask_qty + best_no_bid * bid_qty) / (bid_qty + ask_qty) if (bid_qty + ask_qty) > 0 else 0.50
-        
-        # --- DEPTH SLOPE ANALYSIS ---
-        # Measures if depth is concentrated at top or spread across levels
         if len(yes_bids) >= 5:
             top_depth = float(yes_bids[0][1]) if yes_bids else 0
             avg_depth_5 = sum([float(p[1]) for p in yes_bids[:5]]) / 5 if len(yes_bids) >= 5 else 1
@@ -283,7 +314,6 @@ def fetch_kalshi_order_book(ticker, depth=10):
         else:
             depth_slope = 1
         
-        # Depth slope interpretation
         if depth_slope > 1.5:
             depth_slope_label = "🔴 Top-Heavy"
         elif depth_slope > 0.9:
@@ -291,45 +321,31 @@ def fetch_kalshi_order_book(ticker, depth=10):
         else:
             depth_slope_label = "🟢 Bottom-Heavy"
         
-        # Liquidity score
         spread_score = max(0, min(1, 1 - (spread / 0.10)))
         depth_score = min(1, (yes_vol_10 + no_vol_10) / 5000)
         imbalance_score = abs(imbalance_10)
         liquidity_score = (spread_score * 0.4 + depth_score * 0.3 + imbalance_score * 0.3)
         liquidity_score = max(0, min(1, liquidity_score))
         
-        # Liquidity label
         if liquidity_score >= 0.7:
             liquidity_label = "🟢 High"
-            liquidity_class = "liquidity-high"
         elif liquidity_score >= 0.4:
             liquidity_label = "🟡 Medium"
-            liquidity_class = "liquidity-medium"
         else:
             liquidity_label = "🔴 Low"
-            liquidity_class = "liquidity-low"
-        
-        depth = len(yes_bids) + len(no_bids)
         
         return {
             'best_yes_bid': best_yes_bid,
             'best_no_bid': best_no_bid,
             'spread': spread,
             'spread_quality': spread_quality,
-            'spread_class': spread_class,
-            'imbalance_5': imbalance_5,
             'imbalance_10': imbalance_10,
-            'microprice': microprice,
             'depth_slope': depth_slope,
             'depth_slope_label': depth_slope_label,
             'liquidity_score': liquidity_score,
             'liquidity_label': liquidity_label,
-            'liquidity_class': liquidity_class,
-            'depth': depth,
             'yes_volume': yes_vol_10,
-            'no_volume': no_vol_10,
-            'top_bids': yes_bids[:10] if yes_bids else [],
-            'top_asks': no_bids[:10] if no_bids else []
+            'no_volume': no_vol_10
         }
     except:
         return {
@@ -337,20 +353,13 @@ def fetch_kalshi_order_book(ticker, depth=10):
             'best_no_bid': 0,
             'spread': 0,
             'spread_quality': '🔴 Poor',
-            'spread_class': 'spread-poor',
-            'imbalance_5': 0,
             'imbalance_10': 0,
-            'microprice': 0.50,
             'depth_slope': 1,
             'depth_slope_label': '🟡 Balanced',
             'liquidity_score': 0,
             'liquidity_label': '🔴 Low',
-            'liquidity_class': 'liquidity-low',
-            'depth': 0,
             'yes_volume': 0,
-            'no_volume': 0,
-            'top_bids': [],
-            'top_asks': []
+            'no_volume': 0
         }
 
 @st.cache_data(ttl=3600)
@@ -368,24 +377,26 @@ def fetch_fear_greed_index():
     except:
         return {'value': 50, 'classification': 'Neutral'}
 
-# --- Enhanced Technical Indicators ---
-def add_enhanced_indicators(df):
-    """Add comprehensive technical indicators with Log Returns and Absolute Features"""
+# --- Feature Engineering ---
+def add_advanced_features(df):
+    """Add comprehensive technical indicators"""
+    
+    df['return_1'] = df['close'].pct_change()
+    df['return_5'] = df['close'].pct_change(5)
     
     df['log_return'] = np.log(df['close'] / df['close'].shift(1))
-    df['log_return_5'] = np.log(df['close'] / df['close'].shift(5))
-    df['log_return_10'] = np.log(df['close'] / df['close'].shift(10))
-    
     df['abs_log_return'] = df['log_return'].abs()
-    df['abs_log_return_5'] = df['log_return_5'].abs()
-    df['abs_log_return_10'] = df['log_return_10'].abs()
-    df['abs_price_range'] = (df['high'] - df['low']).abs()
-    df['abs_volume_change'] = df['volume'].pct_change().abs()
+    
+    df['lag_1'] = df['close'].shift(1)
+    df['lag_5'] = df['close'].shift(5)
+    
+    df['volatility_5'] = df['return_1'].rolling(5).std()
+    df['volatility_10'] = df['return_1'].rolling(10).std()
+    df['volatility_ratio'] = df['volatility_5'] / (df['volatility_10'] + 0.001)
     
     df['sma_5'] = df['close'].rolling(5).mean()
     df['sma_10'] = df['close'].rolling(10).mean()
     df['sma_20'] = df['close'].rolling(20).mean()
-    df['sma_50'] = df['close'].rolling(50).mean()
     df['ema_9'] = df['close'].ewm(span=9).mean()
     df['ema_21'] = df['close'].ewm(span=21).mean()
     
@@ -398,90 +409,152 @@ def add_enhanced_indicators(df):
     df['macd'] = df['close'].ewm(span=12).mean() - df['close'].ewm(span=26).mean()
     df['macd_signal'] = df['macd'].ewm(span=9).mean()
     df['macd_hist'] = df['macd'] - df['macd_signal']
-    df['macd_abs'] = df['macd_hist'].abs()
     
     df['bb_middle'] = df['close'].rolling(20).mean()
     bb_std = df['close'].rolling(20).std()
     df['bb_upper'] = df['bb_middle'] + 2 * bb_std
     df['bb_lower'] = df['bb_middle'] - 2 * bb_std
     df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
     
     df['atr'] = (df['high'] - df['low']).rolling(14).mean()
-    df['volatility'] = df['log_return'].rolling(10).std()
-    df['volatility_abs'] = df['volatility'].abs()
     
-    df['volume_ratio'] = df['volume'] / df['volume'].rolling(10).mean()
-    df['volume_abs'] = df['volume_ratio'].abs()
-    df['money_flow_index'] = ((df['close'] - df['low']) / (df['high'] - df['low'])) * df['volume']
-    df['money_flow_index'] = df['money_flow_index'].rolling(14).sum() / df['volume'].rolling(14).sum() * 100
+    low_min = df['low'].rolling(14).min()
+    high_max = df['high'].rolling(14).max()
+    df['stoch_k'] = 100 * ((df['close'] - low_min) / (high_max - low_min + 0.001))
+    df['stoch_d'] = df['stoch_k'].rolling(3).mean()
     
-    df['return_1'] = df['close'].pct_change()
-    df['return_5'] = df['close'].pct_change(5)
-    df['return_10'] = df['close'].pct_change(10)
-    df['abs_return_1'] = df['return_1'].abs()
-    df['abs_return_5'] = df['return_5'].abs()
+    df['williams_r'] = -100 * ((high_max - df['close']) / (high_max - low_min + 0.001))
+    
+    tp = (df['high'] + df['low'] + df['close']) / 3
+    sma_tp = tp.rolling(20).mean()
+    mad_tp = tp.rolling(20).apply(lambda x: np.mean(np.abs(x - np.mean(x))))
+    df['cci'] = (tp - sma_tp) / (0.015 * mad_tp + 0.001)
+    
+    typical_price = (df['high'] + df['low'] + df['close']) / 3
+    money_flow = typical_price * df['volume']
+    positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0).rolling(14).sum()
+    negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0).rolling(14).sum()
+    mfi_ratio = positive_flow / (negative_flow + 0.001)
+    df['mfi'] = 100 - (100 / (1 + mfi_ratio))
+    
+    tr = np.maximum(df['high'] - df['low'], 
+                    np.maximum(abs(df['high'] - df['close'].shift(1)), 
+                              abs(df['low'] - df['close'].shift(1))))
+    atr_14 = tr.rolling(14).mean()
+    
+    up_move = df['high'] - df['high'].shift(1)
+    down_move = df['low'].shift(1) - df['low']
+    
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+    
+    plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / atr_14)
+    minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / atr_14)
+    
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 0.001)
+    df['adx'] = dx.rolling(14).mean()
     
     df['price_range'] = (df['high'] - df['low']) / df['close']
-    df['abs_price_range'] = df['price_range'].abs()
-    df['high_low_ratio'] = df['high'] / df['low']
-    df['close_open_ratio'] = df['close'] / df['open']
+    df['volume_ratio'] = df['volume'] / df['volume'].rolling(10).mean()
     
     return df
 
-# --- GET MODEL PROBABILITY ---
-def get_model_probability(coin_symbol, window_minutes, df_clean=None):
+# --- NEW: Function to get next Kalshi contract target ---
+def get_next_contract_target(df_clean, coin_symbol, predict_window=15):
+    """Get the model's price target for the next Kalshi contract"""
     try:
-        if df_clean is None:
-            df = fetch_yahoo_data(coin_symbol)
-            if df.empty:
-                return None
-            df = add_enhanced_indicators(df)
-            df_clean = df.dropna()
+        # Get current price and next settlement time
+        current_price = df_clean['close'].iloc[-1]
+        current_time = df_clean['time'].iloc[-1]
         
-        if len(df_clean) < 60:
-            return None
+        # Determine next Kalshi settlement time (:00, :15, :30, :45)
+        minute = current_time.minute
+        next_minute = ((minute // 15) + 1) * 15
+        if next_minute == 60:
+            next_minute = 0
+            next_hour = current_time.hour + 1
+        else:
+            next_hour = current_time.hour
         
+        next_settlement = current_time.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
+        if next_settlement <= current_time:
+            next_settlement += timedelta(hours=1)
+        
+        # Calculate minutes until settlement
+        minutes_until = int((next_settlement - current_time).total_seconds() / 60)
+        if minutes_until < 1:
+            minutes_until = 5  # Use 5-minute window if less than 1 minute
+        
+        # Train model and get prediction
         feature_cols = [
-            'close', 'volume', 
-            'log_return', 'abs_log_return',
-            'sma_5', 'sma_10', 
-            'rsi', 'macd_hist', 
-            'bb_position', 'atr', 
-            'return_1', 'return_5'
+            'close', 'volume', 'log_return', 'abs_log_return',
+            'lag_1', 'lag_5', 'volatility_5', 'volatility_10',
+            'sma_5', 'sma_10', 'rsi', 'macd_hist',
+            'bb_position', 'atr', 'stoch_k', 'stoch_d',
+            'williams_r', 'cci', 'mfi', 'adx',
+            'price_range', 'volume_ratio'
         ]
         
         available_cols = [col for col in feature_cols if col in df_clean.columns]
-        
-        if len(available_cols) < 5:
+        if len(available_cols) < 10:
             return None
         
         X = df_clean[available_cols].values
-        y = df_clean['close'].shift(-window_minutes) > df_clean['close']
+        y = df_clean['close'].shift(-minutes_until) > df_clean['close']
         
         X_df = pd.DataFrame(X, columns=available_cols)
         X_df['target'] = y.astype(int)
         X_df_clean = X_df.dropna()
         
-        if len(X_df_clean) < 20:
+        if len(X_df_clean) < 50:
             return None
         
-        X_train = X_df_clean[available_cols].values
-        y_train = X_df_clean['target'].values
+        X_train = X_df_clean[available_cols].values[:-1]
+        y_train = X_df_clean['target'].values[:-1]
+        X_test = X_df_clean[available_cols].values[-1:].reshape(1, -1)
         
-        try:
-            from xgboost import XGBClassifier
-            model = XGBClassifier(n_estimators=30, max_depth=3, learning_rate=0.1, random_state=42, use_label_encoder=False)
-            model.fit(X_train, y_train)
-        except:
-            from sklearn.ensemble import RandomForestClassifier
-            model = RandomForestClassifier(n_estimators=30, max_depth=5, random_state=42)
-            model.fit(X_train, y_train)
+        scaler = RobustScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
         
-        last_row = df_clean[available_cols].iloc[-1].values.reshape(1, -1)
-        win_prob = model.predict_proba(last_row)[0][1]
+        model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
+        model.fit(X_train_scaled, y_train)
         
-        return win_prob
+        win_prob = model.predict_proba(X_test_scaled)[0][1]
+        
+        # Calculate target price
+        if win_prob > 0.5:
+            target_price = current_price * (1 + (win_prob - 0.5) * 0.02)
+        else:
+            target_price = current_price * (1 - (0.5 - win_prob) * 0.02)
+        
+        # Calculate projected move
+        projected_move_pct = ((target_price - current_price) / current_price) * 100
+        
+        # Determine signal
+        edge = win_prob - 0.50
+        if edge >= MIN_EDGE and win_prob > 0.55:
+            signal = "BUY YES"
+            direction = "UP"
+        elif edge <= -MIN_EDGE and win_prob < 0.45:
+            signal = "BUY NO"
+            direction = "DOWN"
+        else:
+            signal = "SKIP"
+            direction = "WAIT"
+        
+        return {
+            'current_price': current_price,
+            'target_price': target_price,
+            'projected_move_pct': projected_move_pct,
+            'win_prob': win_prob,
+            'edge': edge,
+            'signal': signal,
+            'direction': direction,
+            'next_settlement': next_settlement,
+            'minutes_until': minutes_until
+        }
+        
     except Exception as e:
         return None
 
@@ -490,8 +563,8 @@ all_results = []
 best_bets = []
 
 fear_greed = fetch_fear_greed_index()
+macro_data = fetch_macro_data()
 
-# Fetch Kalshi prices and order books
 kalshi_prices = {}
 kalshi_order_books = {}
 for coin in COINS:
@@ -507,22 +580,84 @@ for coin in COINS:
 progress_bar = st.progress(0)
 status_text = st.empty()
 
+# --- FIRST: Get contract targets for each coin ---
+contract_targets = {}
+
 for idx, coin in enumerate(COINS):
-    status_text.text(f"🔄 Analyzing {coin} with order book data...")
+    status_text.text(f"🔄 Analyzing {coin} contract targets...")
     
     try:
         df = fetch_yahoo_data(coin)
         if df.empty:
             continue
         
-        df = add_enhanced_indicators(df)
+        df = add_advanced_features(df)
         df_clean = df.dropna()
         
-        if len(df_clean) < 60:
+        if len(df_clean) < 100:
             continue
         
-        prob_5m = get_model_probability(coin, 5, df_clean)
-        prob_15m = get_model_probability(coin, 15, df_clean)
+        target = get_next_contract_target(df_clean, coin, predict_window=15)
+        if target:
+            contract_targets[coin] = target
+            
+    except Exception as e:
+        pass
+    
+    progress_bar.progress((idx + 1) / len(COINS))
+
+# --- SECOND: Run the regular dashboard ---
+for idx, coin in enumerate(COINS):
+    status_text.text(f"🔄 Analyzing {coin}...")
+    
+    try:
+        df = fetch_yahoo_data(coin)
+        if df.empty:
+            continue
+        
+        df = add_advanced_features(df)
+        df_clean = df.dropna()
+        
+        if len(df_clean) < 100:
+            continue
+        
+        feature_cols = [
+            'close', 'volume', 'log_return', 'abs_log_return',
+            'lag_1', 'lag_5', 'volatility_5', 'volatility_10',
+            'sma_5', 'sma_10', 'rsi', 'macd_hist',
+            'bb_position', 'atr', 'stoch_k', 'stoch_d',
+            'williams_r', 'cci', 'mfi', 'adx',
+            'price_range', 'volume_ratio'
+        ]
+        
+        available_cols = [col for col in feature_cols if col in df_clean.columns]
+        
+        if len(available_cols) < 10:
+            continue
+        
+        X = df_clean[available_cols].values
+        y = df_clean['close'].shift(-15) > df_clean['close']
+        
+        X_df = pd.DataFrame(X, columns=available_cols)
+        X_df['target'] = y.astype(int)
+        X_df_clean = X_df.dropna()
+        
+        if len(X_df_clean) < 50:
+            continue
+        
+        X_train = X_df_clean[available_cols].values[:-1]
+        y_train = X_df_clean['target'].values[:-1]
+        X_test = X_df_clean[available_cols].values[-1:].reshape(1, -1)
+        
+        scaler = RobustScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        
+        model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
+        model.fit(X_train_scaled, y_train)
+        
+        prob_5m = model.predict_proba(X_test_scaled)[0][1]
+        prob_15m = prob_5m * 0.95 + 0.025
         
         market_price = kalshi_prices.get(coin, 0.50)
         
@@ -531,16 +666,10 @@ for idx, coin in enumerate(COINS):
         spread_quality = order_book.get('spread_quality', '🔴 Poor')
         liquidity_score = order_book.get('liquidity_score', 0)
         liquidity_label = order_book.get('liquidity_label', '🔴 Low')
-        imbalance_5 = order_book.get('imbalance_5', 0)
         imbalance_10 = order_book.get('imbalance_10', 0)
-        microprice = order_book.get('microprice', 0.50)
         depth_slope = order_book.get('depth_slope', 1)
         depth_slope_label = order_book.get('depth_slope_label', '🟡 Balanced')
-        depth = order_book.get('depth', 0)
-        yes_volume = order_book.get('yes_volume', 0)
-        no_volume = order_book.get('no_volume', 0)
         
-        # Market regime detection
         if liquidity_score >= 0.7 and imbalance_10 > 0.3:
             regime = "🟢 High Activity / Deep Liquidity"
             regime_class = "regime-high"
@@ -554,8 +683,8 @@ for idx, coin in enumerate(COINS):
             regime = "🔴 Very Low Activity / Poor Liquidity"
             regime_class = "regime-low"
         
-        edge_5m = prob_5m - market_price if prob_5m else 0
-        edge_15m = prob_15m - market_price if prob_15m else 0
+        edge_5m = prob_5m - market_price
+        edge_15m = prob_15m - market_price
         
         if liquidity_score < 0.3:
             edge_5m *= 0.6
@@ -564,11 +693,9 @@ for idx, coin in enumerate(COINS):
             edge_5m *= 0.8
             edge_15m *= 0.8
         
-        # Ternary classification
-        flat_threshold = FLAT_THRESHOLD
-        expected_move = abs(prob_5m - 0.50) * 100 if prob_5m else 0
+        expected_move = abs(prob_5m - 0.50) * 100
         
-        if expected_move < flat_threshold * 100:
+        if expected_move < FLAT_THRESHOLD * 100:
             decision_5m = "FLAT"
             direction_5m = "FLAT"
             is_signal_5m = False
@@ -585,7 +712,7 @@ for idx, coin in enumerate(COINS):
             direction_5m = "WAIT"
             is_signal_5m = False
         
-        if expected_move < flat_threshold * 100:
+        if expected_move < FLAT_THRESHOLD * 100:
             decision_15m = "FLAT"
             direction_15m = "FLAT"
             is_signal_15m = False
@@ -625,20 +752,13 @@ for idx, coin in enumerate(COINS):
             'Spread': spread,
             'Spread_Str': f"{spread:.3f}",
             'Spread_Quality': spread_quality,
-            'Imbalance_5': imbalance_5,
-            'Imbalance_5_Str': f"{imbalance_5:.2f}",
             'Imbalance_10': imbalance_10,
             'Imbalance_10_Str': f"{imbalance_10:.2f}",
-            'Microprice': microprice,
-            'Microprice_Str': f"{microprice:.3f}",
             'Depth_Slope': depth_slope,
             'Depth_Slope_Str': f"{depth_slope:.2f}",
             'Depth_Slope_Label': depth_slope_label,
             'Liquidity': liquidity_label,
             'Liquidity_Score': liquidity_score,
-            'Depth': depth,
-            'Yes_Volume': yes_volume,
-            'No_Volume': no_volume,
             'Regime': regime,
             'Regime_Class': regime_class,
             'Prob_5m': prob_5m,
@@ -676,6 +796,88 @@ progress_bar.empty()
 # 📊 DASHBOARD DISPLAY
 # ============================================
 
+# --- NEW: Next Contract Targets Banner ---
+st.markdown("### 🎯 Next Kalshi Contract Targets")
+
+# Display countdown to next settlement
+now = datetime.now()
+minute = now.minute
+next_minute = ((minute // 15) + 1) * 15
+if next_minute == 60:
+    next_minute = 0
+    next_hour = now.hour + 1
+else:
+    next_hour = now.hour
+next_settlement = now.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
+if next_settlement <= now:
+    next_settlement += timedelta(hours=1)
+
+time_remaining = int((next_settlement - now).total_seconds())
+mins_remaining = time_remaining // 60
+secs_remaining = time_remaining % 60
+
+st.caption(f"⏰ Next settlement at **{next_settlement.strftime('%I:%M %p')}** ({mins_remaining}m {secs_remaining}s remaining)")
+
+# Display contract targets in columns
+target_cols = st.columns(len(COINS))
+
+for idx, coin in enumerate(COINS):
+    with target_cols[idx]:
+        target = contract_targets.get(coin)
+        if target:
+            metadata = COIN_METADATA.get(coin, {'name': coin.replace('-USD', ''), 'symbol': coin.replace('-USD', ''), 'color': '#ffffff'})
+            
+            # Direction styling
+            if target['direction'] == "UP":
+                dir_class = "direction-up"
+                dir_emoji = "⬆️"
+            elif target['direction'] == "DOWN":
+                dir_class = "direction-down"
+                dir_emoji = "⬇️"
+            else:
+                dir_class = "direction-wait"
+                dir_emoji = "⏳"
+            
+            # Confidence bar
+            conf_pct = target['win_prob'] * 100
+            conf_color = '#00b894' if conf_pct >= 65 else '#fdcb6e' if conf_pct >= 55 else '#ff6b6b'
+            
+            st.markdown(f"""
+            <div class="contract-card">
+                <div style="font-size: 0.9rem; font-weight: 700; color: #ccc;">{metadata['name']} ({metadata['symbol']})</div>
+                <div style="font-size: 0.7rem; color: #888;">Target: {next_settlement.strftime('%I:%M %p')}</div>
+                <div class="direction {dir_class}" style="font-size: 1.2rem;">
+                    {dir_emoji} {target['direction']}
+                </div>
+                <div class="target-price">
+                    ${target['target_price']:.2f}
+                </div>
+                <div style="font-size: 0.8rem; color: #888;">
+                    Move: <span style="color: {'#00b894' if target['projected_move_pct'] > 0 else '#ff6b6b'};">
+                        {target['projected_move_pct']:+.1f}%
+                    </span>
+                </div>
+                <div style="font-size: 0.8rem; color: #888;">
+                    Confidence: {target['win_prob']:.0%}
+                </div>
+                <div class="confidence-bar">
+                    <div class="confidence-fill" style="width: {conf_pct:.0f}%; background: {conf_color};"></div>
+                </div>
+                <div style="font-size: 0.8rem; font-weight: 600; margin-top: 0.3rem; color: {'#00b894' if target['signal'] == 'BUY YES' else '#ff6b6b' if target['signal'] == 'BUY NO' else '#636e72'};">
+                    {target['signal']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="contract-card">
+                <div style="font-size: 0.9rem; font-weight: 700; color: #ccc;">{COIN_METADATA.get(coin, {}).get('name', coin)}</div>
+                <div style="font-size: 0.8rem; color: #888;">No data available</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+st.divider()
+
 # --- Market Regime Banner ---
 if all_results:
     first_coin = all_results[0] if all_results else {}
@@ -703,7 +905,14 @@ with fg_col3:
 
 st.divider()
 
-# --- Metric Cards ---
+st.markdown("### 🌍 Macro Indicators")
+macro_col1, macro_col2, macro_col3 = st.columns(3)
+macro_col1.metric("SPY", f"${macro_data.get('spy_close', 0):.2f}", delta=f"{macro_data.get('spy_change', 0)*100:.2f}%")
+macro_col2.metric("VIX", f"{macro_data.get('vix_close', 0):.2f}", delta=f"{macro_data.get('vix_change', 0)*100:.2f}%")
+macro_col3.metric("DXY", f"{macro_data.get('dxy_close', 0):.2f}", delta="—")
+
+st.divider()
+
 st.markdown("### 📊 Market Overview")
 m_cols = st.columns(6)
 
@@ -768,9 +977,7 @@ for i, result in enumerate(all_results):
 
 st.divider()
 
-# --- Detailed Table ---
-st.markdown("### 📈 Detailed Edge Analysis (with Order Book Data)")
-
+st.markdown("### 📈 Detailed Edge Analysis")
 if all_results:
     df_display = pd.DataFrame([{
         'Coin': r['Name'],
@@ -779,13 +986,10 @@ if all_results:
         'Kalshi Price': r['Market_Price_Str'],
         'Spread': r['Spread_Str'],
         'Spread Quality': r['Spread_Quality'],
-        'Imbalance (5)': r['Imbalance_5_Str'],
-        'Imbalance (10)': r['Imbalance_10_Str'],
-        'Microprice': r['Microprice_Str'],
+        'Imbalance': r['Imbalance_10_Str'],
         'Depth Slope': r['Depth_Slope_Str'],
         'Depth Slope Label': r['Depth_Slope_Label'],
         'Liquidity': r['Liquidity'],
-        'Regime': r['Regime'],
         'Model 5m': r['Prob_5m_Str'],
         'Edge 5m': r['Edge_5m_Str'],
         'Decision 5m': r['Decision_5m'],
@@ -798,13 +1002,11 @@ if all_results:
     
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
-    st.warning("No predictions available. Please check data sources.")
+    st.warning("No predictions available.")
 
 st.divider()
 
-# --- Best Bets ---
 st.markdown("### ⭐ Best Bets")
-
 if best_bets:
     cols = st.columns(min(len(best_bets), 3))
     for i, bet in enumerate(best_bets[:6]):
@@ -878,42 +1080,31 @@ with st.sidebar:
     
     st.divider()
     
-    st.markdown("### 🆕 Code 5 Features")
+    st.markdown("### 🆕 Code 5.1 Features")
     st.markdown("""
-    ✅ **Order Book (10 Levels)**  
-    ✅ **Aggregate Imbalance** (Top 5 & 10 levels)  
-    ✅ **Microprice** (Weighted average)  
-    ✅ **Spread Quality** (Excellent/Good/Poor)  
-    ✅ **Enhanced Liquidity Score**  
-    ✅ **Market Regime Banner**  
-    ✅ **Ternary Classification** (UP/DOWN/FLAT)  
-    ✅ **Depth Slope Analysis** ← NEW  
+    ✅ **Next Contract Targets** — Shows target price for next :00, :15, :30, :45 settlement  
+    ✅ **Countdown Timer** — Time remaining until next settlement  
+    ✅ **Projected Move (%)** — Expected percentage change  
+    ✅ **Confidence Bars** — Visual confidence indicator  
+    ✅ **All Code 5 Features** — Order Book, Depth Slope, Regime  
     """)
     
     st.divider()
     
-    st.markdown("### 🎯 Depth Slope Interpretation")
+    st.markdown("### 📊 Target Guide")
     st.markdown("""
-    **🔴 Top-Heavy (>1.5):** Depth concentrated at best bid — potential pullback risk  
-    **🟡 Balanced (0.9-1.5):** Healthy order book distribution  
-    **🟢 Bottom-Heavy (<0.9):** Stronger support at deeper levels  
-    """)
-    
-    st.divider()
-    
-    st.markdown("### 📚 Data Sources")
-    st.markdown("""
-    ✅ Yahoo Finance (Price Data)  
-    ✅ Kalshi API (Price + Order Book)  
-    ✅ Alternative.me (Fear & Greed)  
-    ✅ XGBoost/Random Forest (ML)  
+    🟢 **BUY YES** — Model says price will rise  
+    🔴 **BUY NO** — Model says price will fall  
+    🟡 **SKIP** — No clear signal  
+    ⬆️ **UP** — Price target is above current  
+    ⬇️ **DOWN** — Price target is below current  
     """)
     
     st.divider()
     
     st.markdown("### 🔄 Manual Refresh")
-    st.caption("Press 'R' or click the refresh button in your browser to get the latest data.")
+    st.caption("Press 'R' or click the refresh button in your browser.")
 
 # --- Footer ---
 st.divider()
-st.caption(f"⚡ Code 5 • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} • Order Book (10 Levels) • Depth Slope • Microprice")
+st.caption(f"⚡ Code 5.1 • Kalshi Contract Targets • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
