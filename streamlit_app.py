@@ -1,8 +1,8 @@
 # ============================================
-# CODE 5.3: KALSHI EDGE DETECTOR WITH STRIKE PRICE
+# CODE 5.3: KALSHI EDGE DETECTOR WITH STRIKE PRICE (UPDATED)
 # Features: All previous features + Strike Price + Implied Probability
-#           Clear comparison: Model Probability vs Kalshi Implied Probability
-#           Removed: Market Overview (Model vs Kalshi) section
+#           Next Contract Targets at TOP with built-in comparison
+#           Clear side-by-side: Model Probability vs Kalshi Implied Probability
 # ============================================
 
 import streamlit as st
@@ -246,6 +246,36 @@ st.markdown("""
         font-size: 0.7rem;
         color: #888;
     }
+    .contract-comparison {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.3rem;
+        background: #0d0d1a;
+        margin: 0.2rem 0;
+        font-size: 0.8rem;
+    }
+    .contract-comparison .model {
+        color: #667eea;
+        font-weight: 600;
+    }
+    .contract-comparison .kalshi {
+        color: #fdcb6e;
+        font-weight: 600;
+    }
+    .contract-comparison .edge {
+        font-weight: 700;
+    }
+    .edge-up {
+        color: #00b894;
+    }
+    .edge-down {
+        color: #ff6b6b;
+    }
+    .edge-neutral {
+        color: #fdcb6e;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -440,12 +470,10 @@ def fetch_kalshi_market_data(ticker):
         data = response.json()
         market = data.get('market', {})
         
-        # Get strike price and contract details
         strike_price = market.get('strike_price', 0)
         yes_bid = market.get('yes_bid', 0)
         yes_ask = market.get('yes_ask', 0)
         
-        # Calculate implied probability (mid-price)
         if yes_bid > 0 and yes_ask > 0:
             implied_probability = (yes_bid + yes_ask) / 2
         elif yes_bid > 0:
@@ -768,6 +796,7 @@ def get_next_contract_target(df_clean, coin_symbol):
 all_results = []
 best_bets = []
 settlement_results = []
+contract_targets = {}
 
 fear_greed = fetch_fear_greed_index()
 macro_data = fetch_macro_data()
@@ -788,8 +817,6 @@ progress_bar = st.progress(0)
 status_text = st.empty()
 
 # --- Get contract targets ---
-contract_targets = {}
-
 for idx, coin in enumerate(COINS):
     status_text.text(f"🔄 Analyzing {coin} contract targets...")
     
@@ -813,7 +840,7 @@ for idx, coin in enumerate(COINS):
     
     progress_bar.progress((idx + 1) / len(COINS))
 
-# --- Run regular dashboard and compare with previous settlement ---
+# --- Run regular dashboard ---
 for idx, coin in enumerate(COINS):
     status_text.text(f"🔄 Analyzing {coin}...")
     
@@ -866,14 +893,12 @@ for idx, coin in enumerate(COINS):
         prob_5m = model.predict_proba(X_test_scaled)[0][1]
         prob_15m = prob_5m * 0.95 + 0.025
         
-        # --- NEW: Get Kalshi market data (strike price + implied probability) ---
         kalshi_market = kalshi_market_data.get(coin, {})
         strike_price = kalshi_market.get('strike_price', 0)
         implied_probability = kalshi_market.get('implied_probability', 0.50)
         yes_bid = kalshi_market.get('yes_bid', 0)
         yes_ask = kalshi_market.get('yes_ask', 0)
         
-        # Use implied probability as the market price
         market_price = implied_probability
         
         order_book = kalshi_order_books.get(coin, {})
@@ -907,7 +932,6 @@ for idx, coin in enumerate(COINS):
             regime = "🔴 Very Low Activity / Poor Liquidity"
             regime_class = "regime-low"
         
-        # --- NEW: Edge calculated against implied probability ---
         edge_5m = prob_5m - market_price if prob_5m else 0
         edge_15m = prob_15m - market_price if prob_15m else 0
         
@@ -1064,7 +1088,6 @@ for idx, coin in enumerate(COINS):
                         except:
                             pass
         
-        # --- Format result with extra decimal places ---
         result = {
             'Name': metadata['name'],
             'Symbol': metadata['symbol'],
@@ -1127,6 +1150,97 @@ progress_bar.empty()
 # 📊 DASHBOARD DISPLAY
 # ============================================
 
+# --- 🎯 NEXT CONTRACT TARGETS (NOW AT TOP) ---
+st.markdown("### 🎯 Next Kalshi Contract Targets & Comparison")
+
+if TZ_AVAILABLE:
+    now = datetime.now(pytz.timezone(LOCAL_TZ))
+else:
+    now = datetime.now()
+
+next_settlement, minutes_until = get_next_kalshi_settlement(now)
+
+st.caption(f"⏰ Next settlement at **{next_settlement.strftime('%I:%M %p CT')}** ({minutes_until}m remaining)")
+
+target_cols = st.columns(len(COINS))
+
+for idx, coin in enumerate(COINS):
+    with target_cols[idx]:
+        target = contract_targets.get(coin)
+        kalshi_market = kalshi_market_data.get(coin, {})
+        implied_prob = kalshi_market.get('implied_probability', 0.50)
+        
+        if target:
+            metadata = COIN_METADATA.get(coin, {'name': coin.replace('-USD', ''), 'symbol': coin.replace('-USD', ''), 'color': '#ffffff'})
+            
+            if target['direction'] == "UP":
+                dir_class = "direction-up"
+                dir_emoji = "⬆️"
+            elif target['direction'] == "DOWN":
+                dir_class = "direction-down"
+                dir_emoji = "⬇️"
+            else:
+                dir_class = "direction-wait"
+                dir_emoji = "⏳"
+            
+            conf_pct = target['win_prob'] * 100
+            conf_color = '#00b894' if conf_pct >= 65 else '#fdcb6e' if conf_pct >= 55 else '#ff6b6b'
+            
+            # Calculate edge
+            edge = target['win_prob'] - implied_prob
+            
+            st.markdown(f"""
+            <div class="contract-card">
+                <div style="font-size: 0.9rem; font-weight: 700; color: #ccc;">{metadata['name']} ({metadata['symbol']})</div>
+                <div style="font-size: 0.7rem; color: #888;">Target: {next_settlement.strftime('%I:%M %p CT')}</div>
+                <div class="direction {dir_class}" style="font-size: 1.2rem;">
+                    {dir_emoji} {target['direction']}
+                </div>
+                <div class="target-price">
+                    {fmt_price(target['target_price'])}
+                </div>
+                <div style="font-size: 0.8rem; color: #888;">
+                    Move: <span style="color: {'#00b894' if target['projected_move_pct'] > 0 else '#ff6b6b'};">
+                        {fmt_percent(target['projected_move_pct'])}
+                    </span>
+                </div>
+                
+                <!-- COMPARISON BOX -->
+                <div class="comparison-box">
+                    <div style="display: flex; justify-content: space-between;">
+                        <span class="label">🤖 Model:</span>
+                        <span class="model-val">{fmt_confidence(target['win_prob'])}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span class="label">🏛️ Kalshi:</span>
+                        <span class="kalshi-val">{fmt_kalshi(implied_prob)}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 0.2rem; border-top: 1px solid #3d3d5c; padding-top: 0.2rem;">
+                        <span class="label">💎 Edge:</span>
+                        <span class="edge-val {'edge-up' if edge > 0 else 'edge-down' if edge < 0 else 'edge-neutral'}">
+                            {edge:+.1%}
+                        </span>
+                    </div>
+                </div>
+                
+                <div class="confidence-bar">
+                    <div class="confidence-fill" style="width: {conf_pct:.0f}%; background: {conf_color};"></div>
+                </div>
+                <div style="font-size: 0.8rem; font-weight: 600; margin-top: 0.3rem; color: {'#00b894' if target['signal'] == 'BUY YES' else '#ff6b6b' if target['signal'] == 'BUY NO' else '#636e72'};">
+                    {target['signal']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="contract-card">
+                <div style="font-size: 0.9rem; font-weight: 700; color: #ccc;">{COIN_METADATA.get(coin, {}).get('name', coin)}</div>
+                <div style="font-size: 0.8rem; color: #888;">No data available</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+st.divider()
+
 # --- Previous Settlement Results Section ---
 st.markdown("### 📊 Previous Settlement Results")
 st.caption(f"What would have happened if you placed a $10 bet on the model's last prediction (All times in CT)")
@@ -1187,127 +1301,6 @@ if settlement_results:
             st.dataframe(coin_df, use_container_width=True, hide_index=True)
 else:
     st.info("📝 No settlement data yet. The model will track performance as you continue using it.")
-
-st.divider()
-
-# --- Next Contract Targets ---
-st.markdown("### 🎯 Next Kalshi Contract Targets")
-
-if TZ_AVAILABLE:
-    now = datetime.now(pytz.timezone(LOCAL_TZ))
-else:
-    now = datetime.now()
-
-next_settlement, minutes_until = get_next_kalshi_settlement(now)
-
-st.caption(f"⏰ Next settlement at **{next_settlement.strftime('%I:%M %p CT')}** ({minutes_until}m remaining)")
-
-target_cols = st.columns(len(COINS))
-
-for idx, coin in enumerate(COINS):
-    with target_cols[idx]:
-        target = contract_targets.get(coin)
-        if target:
-            metadata = COIN_METADATA.get(coin, {'name': coin.replace('-USD', ''), 'symbol': coin.replace('-USD', ''), 'color': '#ffffff'})
-            
-            if target['direction'] == "UP":
-                dir_class = "direction-up"
-                dir_emoji = "⬆️"
-            elif target['direction'] == "DOWN":
-                dir_class = "direction-down"
-                dir_emoji = "⬇️"
-            else:
-                dir_class = "direction-wait"
-                dir_emoji = "⏳"
-            
-            conf_pct = target['win_prob'] * 100
-            conf_color = '#00b894' if conf_pct >= 65 else '#fdcb6e' if conf_pct >= 55 else '#ff6b6b'
-            
-            st.markdown(f"""
-            <div class="contract-card">
-                <div style="font-size: 0.9rem; font-weight: 700; color: #ccc;">{metadata['name']} ({metadata['symbol']})</div>
-                <div style="font-size: 0.7rem; color: #888;">Target: {next_settlement.strftime('%I:%M %p CT')}</div>
-                <div class="direction {dir_class}" style="font-size: 1.2rem;">
-                    {dir_emoji} {target['direction']}
-                </div>
-                <div class="target-price" style="font-size: 1rem; font-weight: 600; color: #ccc;">
-                    {fmt_price(target['target_price'])}
-                </div>
-                <div style="font-size: 0.8rem; color: #888;">
-                    Move: <span style="color: {'#00b894' if target['projected_move_pct'] > 0 else '#ff6b6b'};">
-                        {fmt_percent(target['projected_move_pct'])}
-                    </span>
-                </div>
-                <div style="font-size: 0.8rem; color: #888;">
-                    Confidence: {fmt_confidence(target['win_prob'])}
-                </div>
-                <div class="confidence-bar">
-                    <div class="confidence-fill" style="width: {conf_pct:.0f}%; background: {conf_color};"></div>
-                </div>
-                <div style="font-size: 0.8rem; font-weight: 600; margin-top: 0.3rem; color: {'#00b894' if target['signal'] == 'BUY YES' else '#ff6b6b' if target['signal'] == 'BUY NO' else '#636e72'};">
-                    {target['signal']}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="contract-card">
-                <div style="font-size: 0.9rem; font-weight: 700; color: #ccc;">{COIN_METADATA.get(coin, {}).get('name', coin)}</div>
-                <div style="font-size: 0.8rem; color: #888;">No data available</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-st.divider()
-
-# --- NEW: Kalshi vs Model Comparison Section (With Strike Price) ---
-st.markdown("### 🔍 Kalshi vs Model Comparison")
-st.caption("Compare your model's probability against Kalshi's implied probability and strike price")
-
-if all_results:
-    comparison_data = []
-    for r in all_results:
-        # Determine if model is above or below strike
-        strike = r['Strike_Price']
-        current_price = r['Price']
-        if strike > 0:
-            price_vs_strike = current_price - strike
-            if price_vs_strike > 0:
-                strike_position = f"🟢 ${price_vs_strike:,.2f} above strike"
-            elif price_vs_strike < 0:
-                strike_position = f"🔴 ${abs(price_vs_strike):,.2f} below strike"
-            else:
-                strike_position = "⚪ At strike"
-        else:
-            strike_position = "—"
-        
-        comparison_data.append({
-            'Coin': r['Name'],
-            'Symbol': r['Symbol'],
-            'Current Price': r['Price_Str'],
-            'Strike Price': fmt_price(strike) if strike > 0 else '—',
-            'Position vs Strike': strike_position,
-            'Model Probability': r['Prob_5m_Str'],
-            'Kalshi Implied Prob': r['Implied_Probability_Str'],
-            'True Edge': r['Edge_5m_Str'],
-            'Decision': r['Decision_5m'],
-            'Liquidity': r['Liquidity']
-        })
-    
-    df_compare = pd.DataFrame(comparison_data)
-    st.dataframe(df_compare, use_container_width=True, hide_index=True)
-    
-    # Explanation
-    st.info("""
-    📖 **How to read this:**
-    - **Strike Price**: The price level Kalshi is using for this contract
-    - **Position vs Strike**: Is the current price above or below the strike?
-    - **Model Probability**: Your model's estimate of the chance of going UP
-    - **Kalshi Implied Prob**: The market's probability (from the contract price)
-    - **True Edge**: Model Probability - Kalshi Implied Probability (positive = good opportunity)
-    - **Decision**: BUY YES if edge > 5%, BUY NO if edge < -5%, otherwise SKIP
-    """)
-else:
-    st.warning("No data available for comparison.")
 
 st.divider()
 
@@ -1378,9 +1371,6 @@ for i, result in enumerate(all_results):
                 dir_display = "⏳ WAIT"
                 dir_color = "#888"
             
-            # Strike price display
-            strike_str = fmt_price(result['Strike_Price']) if result['Strike_Price'] > 0 else '—'
-            
             st.markdown(f"""
             <div class="metric-card">
                 <div class="coin-name">{result['Name']} ({result['Symbol']})</div>
@@ -1400,7 +1390,7 @@ for i, result in enumerate(all_results):
                         <span class="edge-val {edge_class}">{edge_display}</span>
                     </div>
                     <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: #888;">
-                        <span>Strike: {strike_str}</span>
+                        <span>Strike: {fmt_price(result['Strike_Price']) if result['Strike_Price'] > 0 else '—'}</span>
                         <span>{result['Liquidity']}</span>
                     </div>
                 </div>
@@ -1532,29 +1522,26 @@ with st.sidebar:
     
     st.markdown("### 🆕 Code 5.3 Features")
     st.markdown("""
+    ✅ **Next Contract Targets at TOP** — Comparison built in  
     ✅ **Strike Price** — The price level Kalshi is using  
     ✅ **Implied Probability** — Kalshi's market probability  
     ✅ **Model vs Kalshi Comparison** — Clear side-by-side view  
-    ✅ **Position vs Strike** — Is price above or below the strike?  
     ✅ **True Edge** — Model Probability vs Kalshi Implied Probability  
     ✅ **Previous Settlement Comparison** — Shows predicted vs. actual price  
     ✅ **Hypothetical P&L** — $10 bet simulation per coin  
     ✅ **Win/Loss Tracking** — ✅ WIN or ❌ LOSS for each prediction  
     ✅ **Accuracy Tracker** — Running win rate and P&L statistics  
-    ✅ **Per-Coin Performance** — See which coins your model predicts best  
     ✅ **Local Time Zone** — All times in Central Time (CT)  
-    ✅ **Kalshi Schedule Alignment** — :00, :15, :30, :45 settlements  
     """)
     
     st.divider()
     
     st.markdown("### 📊 How to Read the Comparison")
     st.markdown("""
-    1. **Strike Price** = The price level Kalshi is using
-    2. **Position vs Strike** = Is current price above or below?
-    3. **Model Probability** = Your model's estimate
-    4. **Kalshi Implied Prob** = The market's probability
-    5. **True Edge** = Model - Kalshi (positive = good)
+    1. **🤖 Model** = Your model's probability estimate
+    2. **🏛️ Kalshi** = Kalshi's implied probability (from contract price)
+    3. **💎 Edge** = Model - Kalshi (positive = good opportunity)
+    4. **Strike Price** = The price level Kalshi is using
     """)
     
     st.divider()
