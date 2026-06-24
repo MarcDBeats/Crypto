@@ -1,8 +1,8 @@
 # ============================================
 # CODE 5.3: KALSHI EDGE DETECTOR WITH SETTLEMENT BACKTEST (FIXED)
-# Features: All Code 5.2 Features + Previous Settlement Comparison
-#           Hypothetical P&L | Win/Loss Tracking | Accuracy Tracker
-#           FIXED: Pandas 2.1+ compatibility (map instead of applymap)
+# Features: All previous features + Time zone fix + Kalshi schedule alignment
+#           All times displayed in Central Time (CT)
+#           Settlement times exactly at :00, :15, :30, :45
 # ============================================
 
 import streamlit as st
@@ -19,6 +19,32 @@ import warnings
 warnings.filterwarnings('ignore')
 import json
 import os
+
+# --- TIME ZONE SETUP ---
+# Set your local time zone (Central Time)
+LOCAL_TZ = 'America/Chicago'  # Texas Central Time
+
+try:
+    import pytz
+    TZ_AVAILABLE = True
+except ImportError:
+    TZ_AVAILABLE = False
+    st.warning("pytz not installed. Using UTC times. Run: pip install pytz")
+
+def to_local_time(utc_dt):
+    """Convert UTC datetime to Central Time"""
+    if not TZ_AVAILABLE:
+        return utc_dt
+    if utc_dt.tzinfo is None:
+        utc_dt = pytz.UTC.localize(utc_dt)
+    return utc_dt.astimezone(pytz.timezone(LOCAL_TZ))
+
+def get_current_local_time():
+    """Get current Central Time"""
+    if TZ_AVAILABLE:
+        return datetime.now(pytz.timezone(LOCAL_TZ))
+    else:
+        return datetime.now()
 
 # --- Page Config ---
 st.set_page_config(
@@ -219,12 +245,17 @@ st.markdown("""
         font-size: 1.1rem;
         font-weight: 700;
     }
+    .local-time {
+        color: #fdcb6e;
+        font-weight: 600;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
+local_time = get_current_local_time()
 st.markdown('<div class="main-header">📊 Kalshi Edge Detector Pro</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Code 5.3 • Settlement Backtest • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Code 5.3 • Settlement Backtest • All times in CT • Updated: {local_time.strftime('%Y-%m-%d %H:%M:%S')} CT")
 
 # --- Settings ---
 BANKROLL = 100.00
@@ -584,30 +615,54 @@ def add_advanced_features(df):
     
     return df
 
-# --- Get next contract target ---
-def get_next_contract_target(df_clean, coin_symbol, predict_window=15):
+# --- GET NEXT KALSHI SETTLEMENT TIME (FIXED) ---
+def get_next_kalshi_settlement(current_time):
+    """Get the next Kalshi settlement time (:00, :15, :30, :45)"""
+    minute = current_time.minute
+    # Round up to next :00, :15, :30, :45
+    minutes_to_next = (15 - (minute % 15)) % 15
+    if minutes_to_next == 0:
+        minutes_to_next = 15  # If exactly on a settlement, go to next one
+    
+    next_settlement = current_time + timedelta(minutes=minutes_to_next)
+    next_settlement = next_settlement.replace(second=0, microsecond=0)
+    
+    return next_settlement, minutes_to_next
+
+# --- Get previous Kalshi settlement ---
+def get_previous_kalshi_settlement(current_time):
+    """Get the previous Kalshi settlement time (:00, :15, :30, :45)"""
+    minute = current_time.minute
+    # Round down to previous :00, :15, :30, :45
+    minutes_since = minute % 15
+    if minutes_since == 0:
+        minutes_since = 15  # If exactly on a settlement, go back one
+    
+    prev_settlement = current_time - timedelta(minutes=minutes_since)
+    prev_settlement = prev_settlement.replace(second=0, microsecond=0)
+    
+    return prev_settlement
+
+# --- Get contract target with Kalshi alignment ---
+def get_next_contract_target(df_clean, coin_symbol):
     """Get the model's price target for the next Kalshi contract"""
     try:
         current_price = df_clean['close'].iloc[-1]
-        current_time = df_clean['time'].iloc[-1]
         
-        # --- FIX: Round to nearest Kalshi settlement time (:00, :15, :30, :45) ---
-        minute = current_time.minute
-        # Calculate minutes to next Kalshi settlement
-        minutes_to_next = (15 - (minute % 15)) % 15
-        if minutes_to_next == 0:
-            minutes_to_next = 15  # If exactly on a settlement, go to next one
+        # --- FIX: Use local time for Kalshi settlement alignment ---
+        if TZ_AVAILABLE:
+            current_time = datetime.now(pytz.timezone(LOCAL_TZ))
+        else:
+            current_time = datetime.now()
         
-        next_settlement = current_time + timedelta(minutes=minutes_to_next)
-        next_settlement = next_settlement.replace(second=0, microsecond=0)
+        # Get next Kalshi settlement time
+        next_settlement, minutes_until = get_next_kalshi_settlement(current_time)
         
-        minutes_until = minutes_to_next
-        
-        # --- If less than 2 minutes to settlement, use the next one ---
+        # If less than 2 minutes, use the next one
         if minutes_until < 2:
-            minutes_until = 15
-            next_settlement = current_time + timedelta(minutes=15)
-            next_settlement = next_settlement.replace(second=0, microsecond=0)
+            next_settlement, minutes_until = get_next_kalshi_settlement(
+                current_time + timedelta(minutes=15)
+            )
         
         feature_cols = [
             'close', 'volume', 'log_return', 'abs_log_return',
@@ -718,7 +773,7 @@ for idx, coin in enumerate(COINS):
         if len(df_clean) < 100:
             continue
         
-        target = get_next_contract_target(df_clean, coin, predict_window=15)
+        target = get_next_contract_target(df_clean, coin)
         if target:
             contract_targets[coin] = target
             
@@ -863,70 +918,112 @@ for idx, coin in enumerate(COINS):
         metadata = COIN_METADATA.get(coin, {'name': coin.replace('-USD', ''), 'symbol': coin.replace('-USD', ''), 'color': '#ffffff'})
         current_price = df_clean['close'].iloc[-1]
         
-        # --- SIMULATE SETTLEMENT COMPARISON ---
-        if len(df_clean) > 15:
-            prev_price = df_clean['close'].iloc[-16]
-            prev_time = df_clean['time'].iloc[-16]
+        # --- SIMULATE SETTLEMENT COMPARISON USING KALSHI SCHEDULE ---
+        if len(df_clean) > 30:
+            # Get current local time
+            if TZ_AVAILABLE:
+                current_local = datetime.now(pytz.timezone(LOCAL_TZ))
+            else:
+                current_local = datetime.now()
             
-            if len(df_clean) > 30:
-                X_prev = df_clean[available_cols].iloc[-31:-16].values
-                if len(X_prev) >= 10:
-                    try:
-                        X_prev_scaled = scaler.transform(X_prev[-1:].reshape(1, -1))
-                        prev_prob = model.predict_proba(X_prev_scaled)[0][1]
-                        
-                        if prev_prob > 0.55:
-                            prev_direction = "UP"
-                            prev_signal = "BUY YES"
-                        elif prev_prob < 0.45:
-                            prev_direction = "DOWN"
-                            prev_signal = "BUY NO"
-                        else:
-                            prev_direction = "WAIT"
-                            prev_signal = "SKIP"
-                        
-                        prev_predicted_price = prev_price * (1 + (prev_prob - 0.5) * 0.02)
-                        
-                        actual_change_pct = ((current_price - prev_price) / prev_price) * 100
-                        if prev_direction == "UP" and actual_change_pct > 0:
-                            win = True
-                            pnl = BET_SIZE * 0.95
-                        elif prev_direction == "DOWN" and actual_change_pct < 0:
-                            win = True
-                            pnl = BET_SIZE * 0.95
-                        elif prev_direction != "WAIT":
-                            win = False
-                            pnl = -BET_SIZE
-                        else:
-                            win = None
-                            pnl = 0
-                        
-                        if prev_direction != "WAIT" and win is not None:
-                            settlement_tracker.add_settlement(
-                                coin=coin,
-                                settlement_time=prev_time,
-                                predicted_direction=prev_direction,
-                                predicted_price=prev_predicted_price,
-                                actual_price=current_price,
-                                confidence=prev_prob,
-                                edge=prev_prob - 0.50,
-                                win=win,
-                                pnl=pnl
-                            )
-                            
-                            settlement_results.append({
-                                'Coin': metadata['name'],
-                                'Symbol': metadata['symbol'],
-                                'Predicted': prev_direction,
-                                'Predicted Price': f"${prev_predicted_price:.2f}",
-                                'Actual Price': f"${current_price:.2f}",
-                                'Result': '✅ WIN' if win else '❌ LOSS',
-                                'P&L': f"${pnl:.2f}",
-                                'Confidence': f"{prev_prob:.0%}",
-                                'Time': prev_time.strftime('%H:%M')
-                            })
-                    except:
-                        pass
+            # Get previous Kalshi settlement time
+            prev_settlement = get_previous_kalshi_settlement(current_local)
+            
+            # Find the data point closest to the previous settlement time
+            # (The actual price at that settlement time)
+            closest_idx = None
+            closest_diff = None
+            
+            for i in range(len(df_clean) - 1, -1, -1):
+                row_time = df_clean['time'].iloc[i]
+                # Convert row time to local time for comparison
+                if TZ_AVAILABLE:
+                    row_time_local = to_local_time(row_time)
+                else:
+                    row_time_local = row_time
+                
+                diff = abs((row_time_local - prev_settlement).total_seconds())
+                if closest_diff is None or diff < closest_diff:
+                    closest_diff = diff
+                    closest_idx = i
+                    # If within 1 minute, break
+                    if diff < 60:
+                        break
+            
+            if closest_idx is not None and closest_idx > 0:
+                settlement_price = df_clean['close'].iloc[closest_idx]
+                settlement_time = df_clean['time'].iloc[closest_idx]
+                
+                # Get the price 15 minutes before settlement (where the model made its prediction)
+                pred_idx = closest_idx - 15
+                if pred_idx > 0:
+                    pred_price = df_clean['close'].iloc[pred_idx]
+                    
+                    # Get the model's prediction at that time
+                    if len(df_clean) > pred_idx + 10:
+                        try:
+                            # Get data up to the prediction point
+                            X_prev = df_clean[available_cols].iloc[:pred_idx].values
+                            if len(X_prev) >= 20:
+                                X_prev_last = X_prev[-1:].reshape(1, -1)
+                                X_prev_scaled = scaler.transform(X_prev_last)
+                                prev_prob = model.predict_proba(X_prev_scaled)[0][1]
+                                
+                                if prev_prob > 0.55:
+                                    prev_direction = "UP"
+                                elif prev_prob < 0.45:
+                                    prev_direction = "DOWN"
+                                else:
+                                    prev_direction = "WAIT"
+                                
+                                prev_predicted_price = pred_price * (1 + (prev_prob - 0.5) * 0.02)
+                                
+                                actual_change_pct = ((settlement_price - pred_price) / pred_price) * 100
+                                if prev_direction == "UP" and actual_change_pct > 0:
+                                    win = True
+                                    pnl = BET_SIZE * 0.95
+                                elif prev_direction == "DOWN" and actual_change_pct < 0:
+                                    win = True
+                                    pnl = BET_SIZE * 0.95
+                                elif prev_direction != "WAIT":
+                                    win = False
+                                    pnl = -BET_SIZE
+                                else:
+                                    win = None
+                                    pnl = 0
+                                
+                                if prev_direction != "WAIT" and win is not None:
+                                    settlement_tracker.add_settlement(
+                                        coin=coin,
+                                        settlement_time=settlement_time,
+                                        predicted_direction=prev_direction,
+                                        predicted_price=prev_predicted_price,
+                                        actual_price=settlement_price,
+                                        confidence=prev_prob,
+                                        edge=prev_prob - 0.50,
+                                        win=win,
+                                        pnl=pnl
+                                    )
+                                    
+                                    # Format time in CT
+                                    if TZ_AVAILABLE:
+                                        time_str = to_local_time(settlement_time).strftime('%I:%M %p CT')
+                                    else:
+                                        time_str = settlement_time.strftime('%I:%M %p CT')
+                                    
+                                    settlement_results.append({
+                                        'Coin': metadata['name'],
+                                        'Symbol': metadata['symbol'],
+                                        'Predicted': prev_direction,
+                                        'Predicted Price': f"${prev_predicted_price:.2f}",
+                                        'Actual Price': f"${settlement_price:.2f}",
+                                        'Result': '✅ WIN' if win else '❌ LOSS',
+                                        'P&L': f"${pnl:.2f}",
+                                        'Confidence': f"{prev_prob:.0%}",
+                                        'Time': time_str
+                                    })
+                        except:
+                            pass
         
         result = {
             'Name': metadata['name'],
@@ -984,12 +1081,11 @@ progress_bar.empty()
 
 # --- Previous Settlement Results Section ---
 st.markdown("### 📊 Previous Settlement Results")
-st.caption("What would have happened if you placed a $10 bet on the model's last prediction")
+st.caption(f"What would have happened if you placed a $10 bet on the model's last prediction (All times in CT)")
 
 if settlement_results:
     df_settlement = pd.DataFrame(settlement_results)
     
-    # --- FIXED: Use map() instead of applymap() for pandas 2.1+ ---
     def color_result(val):
         if 'WIN' in str(val):
             return 'color: #00b894; font-weight: bold'
@@ -1009,7 +1105,6 @@ if settlement_results:
                 pass
         return ''
     
-    # Try map() first (pandas 2.1+), fallback to applymap()
     try:
         styled_settlement = df_settlement.style.map(color_result, subset=['Result'])
         styled_settlement = styled_settlement.map(color_pnl, subset=['P&L'])
@@ -1019,7 +1114,6 @@ if settlement_results:
     
     st.dataframe(styled_settlement, use_container_width=True, hide_index=True)
     
-    # Overall stats
     stats = settlement_tracker.get_stats()
     if stats:
         col1, col2, col3, col4 = st.columns(4)
@@ -1029,7 +1123,6 @@ if settlement_results:
                     delta=f"${stats.get('total_pnl', 0):.2f}")
         col4.metric("Avg P&L", f"${stats.get('avg_pnl', 0):.2f}")
         
-        # Per-coin stats
         coin_stats = stats.get('coin_stats', {})
         if coin_stats:
             st.caption("Per-Coin Performance")
@@ -1049,23 +1142,14 @@ st.divider()
 # --- Next Contract Targets ---
 st.markdown("### 🎯 Next Kalshi Contract Targets")
 
-now = datetime.now()
-minute = now.minute
-next_minute = ((minute // 15) + 1) * 15
-if next_minute == 60:
-    next_minute = 0
-    next_hour = now.hour + 1
+if TZ_AVAILABLE:
+    now = datetime.now(pytz.timezone(LOCAL_TZ))
 else:
-    next_hour = now.hour
-next_settlement = now.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
-if next_settlement <= now:
-    next_settlement += timedelta(hours=1)
+    now = datetime.now()
 
-time_remaining = int((next_settlement - now).total_seconds())
-mins_remaining = time_remaining // 60
-secs_remaining = time_remaining % 60
+next_settlement, minutes_until = get_next_kalshi_settlement(now)
 
-st.caption(f"⏰ Next settlement at **{next_settlement.strftime('%I:%M %p')}** ({mins_remaining}m {secs_remaining}s remaining)")
+st.caption(f"⏰ Next settlement at **{next_settlement.strftime('%I:%M %p CT')}** ({minutes_until}m remaining)")
 
 target_cols = st.columns(len(COINS))
 
@@ -1091,7 +1175,7 @@ for idx, coin in enumerate(COINS):
             st.markdown(f"""
             <div class="contract-card">
                 <div style="font-size: 0.9rem; font-weight: 700; color: #ccc;">{metadata['name']} ({metadata['symbol']})</div>
-                <div style="font-size: 0.7rem; color: #888;">Target: {next_settlement.strftime('%I:%M %p')}</div>
+                <div style="font-size: 0.7rem; color: #888;">Target: {next_settlement.strftime('%I:%M %p CT')}</div>
                 <div class="direction {dir_class}" style="font-size: 1.2rem;">
                     {dir_emoji} {target['direction']}
                 </div>
@@ -1324,6 +1408,7 @@ with st.sidebar:
     st.markdown(f"**Min Edge:** {MIN_EDGE*100:.0f}%")
     st.markdown(f"**Flat Threshold:** {FLAT_THRESHOLD*100:.1f}%")
     st.markdown(f"**Bet Size:** ${BET_SIZE:.2f}")
+    st.markdown(f"**Time Zone:** {LOCAL_TZ}")
     
     st.divider()
     
@@ -1334,6 +1419,8 @@ with st.sidebar:
     ✅ **Win/Loss Tracking** — ✅ WIN or ❌ LOSS for each prediction  
     ✅ **Accuracy Tracker** — Running win rate and P&L statistics  
     ✅ **Per-Coin Performance** — See which coins your model predicts best  
+    ✅ **Local Time Zone** — All times in Central Time (CT)  
+    ✅ **Kalshi Schedule Alignment** — :00, :15, :30, :45 settlements  
     """)
     
     st.divider()
@@ -1341,7 +1428,7 @@ with st.sidebar:
     st.markdown("### 📊 How It Works")
     st.markdown("""
     1. **Model predicts** direction for each coin  
-    2. **15 minutes later**, compares prediction to actual price  
+    2. **At the next Kalshi settlement**, compares prediction to actual price  
     3. **Records result** — win/loss and hypothetical P&L  
     4. **Tracks performance** — shows your model's real accuracy  
     """)
@@ -1353,4 +1440,4 @@ with st.sidebar:
 
 # --- Footer ---
 st.divider()
-st.caption(f"⚡ Code 5.3 • Settlement Backtest • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Code 5.3 • Settlement Backtest • All times in CT • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
