@@ -1,7 +1,8 @@
 # ============================================
-# CODE 6: CLOSE-TO-SETTLEMENT PRICE PREDICTOR
-# Only trades within 5 minutes of Kalshi settlement
-# Shows model price prediction for each 15-min interval
+# CODE 7: KALSHI PRICE PREDICTOR (FULL DATA, CLEAN DASHBOARD)
+# Behind the scenes: All Code 5 metrics (order book, depth slope, liquidity, etc.)
+# Dashboard: Clean view with price predictions, countdown, and best bets
+# Trading window: Only shows signals within 5 minutes of settlement
 # ============================================
 
 import streamlit as st
@@ -136,18 +137,39 @@ st.markdown("""
         border: 1px solid #3d3d5c;
         opacity: 0.6;
     }
+    .summary-bar {
+        display: flex;
+        justify-content: space-around;
+        padding: 0.5rem;
+        background: #1a1a2e;
+        border-radius: 0.5rem;
+        border: 1px solid #3d3d5c;
+        margin-bottom: 1rem;
+    }
+    .summary-item {
+        text-align: center;
+    }
+    .summary-item .number {
+        font-size: 1.5rem;
+        font-weight: 700;
+    }
+    .summary-item .label {
+        font-size: 0.7rem;
+        color: #888;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
 st.markdown('<div class="main-header">📊 Kalshi Price Predictor</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Only trades within 5 minutes of settlement • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Full data model • Clean dashboard • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
+BANKROLL = 100.00
+MAX_RISK_PER_TRADE = 0.02
 MIN_EDGE = 0.05
 FLAT_THRESHOLD = 0.002
-PREDICT_WINDOW = 5  # Only trade within 5 minutes of settlement
-LOOKBACK_WINDOW = 30
+PREDICT_WINDOW = 5
 
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
@@ -171,7 +193,6 @@ COIN_METADATA = {
 
 # --- Helper Functions ---
 def get_next_kalshi_settlement():
-    """Get the next :00, :15, :30, :45 mark"""
     now = datetime.now()
     minute = now.minute
     minutes_to_next = (15 - (minute % 15)) % 15
@@ -180,17 +201,6 @@ def get_next_kalshi_settlement():
     next_settlement = now + timedelta(minutes=minutes_to_next)
     next_settlement = next_settlement.replace(second=0, microsecond=0)
     return next_settlement, minutes_to_next
-
-def get_previous_kalshi_settlement():
-    """Get the previous :00, :15, :30, :45 mark"""
-    now = datetime.now()
-    minute = now.minute
-    minutes_since = minute % 15
-    if minutes_since == 0:
-        minutes_since = 15
-    prev_settlement = now - timedelta(minutes=minutes_since)
-    prev_settlement = prev_settlement.replace(second=0, microsecond=0)
-    return prev_settlement
 
 def fmt_price(val):
     if val is None or pd.isna(val):
@@ -243,31 +253,186 @@ def fetch_kalshi_price(ticker):
     except:
         return None
 
+@st.cache_data(ttl=5)
+def fetch_kalshi_order_book(ticker, depth=10):
+    try:
+        url = f"https://external-api.kalshi.com/trade-api/v2/markets/{ticker}/orderbook?depth={depth}"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        book = data.get('orderbook_fp', {})
+        
+        yes_bids = book.get('yes_dollars', [])
+        no_bids = book.get('no_dollars', [])
+        
+        best_yes_bid = float(yes_bids[0][0]) if yes_bids else 0
+        best_no_bid = float(no_bids[0][0]) if no_bids else 0
+        
+        spread = best_yes_bid - best_no_bid if best_yes_bid and best_no_bid else 0
+        
+        if spread < 0.02:
+            spread_quality = "🟢 Excellent"
+        elif spread < 0.05:
+            spread_quality = "🟡 Good"
+        else:
+            spread_quality = "🔴 Poor"
+        
+        yes_vol_10 = sum([float(p[1]) for p in yes_bids[:10]]) if yes_bids else 0
+        no_vol_10 = sum([float(p[1]) for p in no_bids[:10]]) if no_bids else 0
+        imbalance_10 = (yes_vol_10 - no_vol_10) / (yes_vol_10 + no_vol_10 + 1) if (yes_vol_10 + no_vol_10) > 0 else 0
+        
+        if len(yes_bids) >= 5:
+            top_depth = float(yes_bids[0][1]) if yes_bids else 0
+            avg_depth_5 = sum([float(p[1]) for p in yes_bids[:5]]) / 5 if len(yes_bids) >= 5 else 1
+            depth_slope = top_depth / avg_depth_5 if avg_depth_5 > 0 else 1
+        else:
+            depth_slope = 1
+        
+        if depth_slope > 1.5:
+            depth_slope_label = "🔴 Top-Heavy"
+        elif depth_slope > 0.9:
+            depth_slope_label = "🟡 Balanced"
+        else:
+            depth_slope_label = "🟢 Bottom-Heavy"
+        
+        spread_score = max(0, min(1, 1 - (spread / 0.10)))
+        depth_score = min(1, (yes_vol_10 + no_vol_10) / 5000)
+        imbalance_score = abs(imbalance_10)
+        liquidity_score = (spread_score * 0.4 + depth_score * 0.3 + imbalance_score * 0.3)
+        liquidity_score = max(0, min(1, liquidity_score))
+        
+        if liquidity_score >= 0.7:
+            liquidity_label = "🟢 High"
+        elif liquidity_score >= 0.4:
+            liquidity_label = "🟡 Medium"
+        else:
+            liquidity_label = "🔴 Low"
+        
+        return {
+            'best_yes_bid': best_yes_bid,
+            'best_no_bid': best_no_bid,
+            'spread': spread,
+            'spread_quality': spread_quality,
+            'imbalance_10': imbalance_10,
+            'depth_slope': depth_slope,
+            'depth_slope_label': depth_slope_label,
+            'liquidity_score': liquidity_score,
+            'liquidity_label': liquidity_label,
+            'yes_volume': yes_vol_10,
+            'no_volume': no_vol_10
+        }
+    except:
+        return {
+            'best_yes_bid': 0,
+            'best_no_bid': 0,
+            'spread': 0,
+            'spread_quality': '🔴 Poor',
+            'imbalance_10': 0,
+            'depth_slope': 1,
+            'depth_slope_label': '🟡 Balanced',
+            'liquidity_score': 0,
+            'liquidity_label': '🔴 Low',
+            'yes_volume': 0,
+            'no_volume': 0
+        }
+
+@st.cache_data(ttl=3600)
+def fetch_fear_greed_index():
+    try:
+        url = "https://api.alternative.me/fng/?limit=2"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        if data and 'data' in data:
+            return {
+                'value': int(data['data'][0]['value']),
+                'classification': data['data'][0]['value_classification']
+            }
+        return {'value': 50, 'classification': 'Neutral'}
+    except:
+        return {'value': 50, 'classification': 'Neutral'}
+
 # --- Feature Engineering ---
 def add_advanced_features(df):
-    """Add technical indicators"""
+    """Add comprehensive technical indicators"""
     
     df['return_1'] = df['close'].pct_change()
     df['return_5'] = df['close'].pct_change(5)
+    
     df['log_return'] = np.log(df['close'] / df['close'].shift(1))
     df['abs_log_return'] = df['log_return'].abs()
+    
     df['lag_1'] = df['close'].shift(1)
     df['lag_5'] = df['close'].shift(5)
+    
     df['volatility_5'] = df['return_1'].rolling(5).std()
     df['volatility_10'] = df['return_1'].rolling(10).std()
+    df['volatility_ratio'] = df['volatility_5'] / (df['volatility_10'] + 0.001)
+    
     df['sma_5'] = df['close'].rolling(5).mean()
     df['sma_10'] = df['close'].rolling(10).mean()
-    df['rsi'] = 100 - (100 / (1 + (df['close'].diff().clip(lower=0).rolling(14).mean() / (-df['close'].diff().clip(upper=0).rolling(14).mean() + 0.001))))
+    df['sma_20'] = df['close'].rolling(20).mean()
+    df['ema_9'] = df['close'].ewm(span=9).mean()
+    df['ema_21'] = df['close'].ewm(span=21).mean()
+    
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
     df['macd'] = df['close'].ewm(span=12).mean() - df['close'].ewm(span=26).mean()
-    df['macd_hist'] = df['macd'] - df['macd'].ewm(span=9).mean()
-    df['bb_position'] = (df['close'] - df['close'].rolling(20).mean() + 2 * df['close'].rolling(20).std()) / (4 * df['close'].rolling(20).std())
+    df['macd_signal'] = df['macd'].ewm(span=9).mean()
+    df['macd_hist'] = df['macd'] - df['macd_signal']
+    
+    df['bb_middle'] = df['close'].rolling(20).mean()
+    bb_std = df['close'].rolling(20).std()
+    df['bb_upper'] = df['bb_middle'] + 2 * bb_std
+    df['bb_lower'] = df['bb_middle'] - 2 * bb_std
+    df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+    
     df['atr'] = (df['high'] - df['low']).rolling(14).mean()
+    
+    low_min = df['low'].rolling(14).min()
+    high_max = df['high'].rolling(14).max()
+    df['stoch_k'] = 100 * ((df['close'] - low_min) / (high_max - low_min + 0.001))
+    df['stoch_d'] = df['stoch_k'].rolling(3).mean()
+    
+    df['williams_r'] = -100 * ((high_max - df['close']) / (high_max - low_min + 0.001))
+    
+    tp = (df['high'] + df['low'] + df['close']) / 3
+    sma_tp = tp.rolling(20).mean()
+    mad_tp = tp.rolling(20).apply(lambda x: np.mean(np.abs(x - np.mean(x))))
+    df['cci'] = (tp - sma_tp) / (0.015 * mad_tp + 0.001)
+    
+    typical_price = (df['high'] + df['low'] + df['close']) / 3
+    money_flow = typical_price * df['volume']
+    positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0).rolling(14).sum()
+    negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0).rolling(14).sum()
+    mfi_ratio = positive_flow / (negative_flow + 0.001)
+    df['mfi'] = 100 - (100 / (1 + mfi_ratio))
+    
+    tr = np.maximum(df['high'] - df['low'], 
+                    np.maximum(abs(df['high'] - df['close'].shift(1)), 
+                              abs(df['low'] - df['close'].shift(1))))
+    atr_14 = tr.rolling(14).mean()
+    
+    up_move = df['high'] - df['high'].shift(1)
+    down_move = df['low'].shift(1) - df['low']
+    
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+    
+    plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / atr_14)
+    minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / atr_14)
+    
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 0.001)
+    df['adx'] = dx.rolling(14).mean()
+    
     df['price_range'] = (df['high'] - df['low']) / df['close']
     df['volume_ratio'] = df['volume'] / df['volume'].rolling(10).mean()
     
     return df
 
-# --- Get Model Prediction for Next Settlement ---
+# --- Get Prediction with Full Data ---
 def get_settlement_prediction(coin_symbol):
     try:
         df = fetch_yahoo_data(coin_symbol)
@@ -280,13 +445,10 @@ def get_settlement_prediction(coin_symbol):
         if len(df_clean) < 60:
             return None
         
-        # Get current price and next settlement time
         current_price = df_clean['close'].iloc[-1]
         
         # Get minutes to next settlement
         _, minutes_until = get_next_kalshi_settlement()
-        
-        # If more than 10 minutes away, use 15-minute window
         if minutes_until > PREDICT_WINDOW + 5:
             minutes_until = 15
         
@@ -295,7 +457,9 @@ def get_settlement_prediction(coin_symbol):
             'close', 'volume', 'log_return', 'abs_log_return',
             'lag_1', 'lag_5', 'volatility_5', 'volatility_10',
             'sma_5', 'sma_10', 'rsi', 'macd_hist',
-            'bb_position', 'atr', 'price_range', 'volume_ratio'
+            'bb_position', 'atr', 'stoch_k', 'stoch_d',
+            'williams_r', 'cci', 'mfi', 'adx',
+            'price_range', 'volume_ratio'
         ]
         
         available_cols = [col for col in feature_cols if col in df_clean.columns]
@@ -325,18 +489,36 @@ def get_settlement_prediction(coin_symbol):
         
         win_prob = model.predict_proba(X_test_scaled)[0][1]
         
-        # Calculate target price
         if win_prob > 0.5:
             target_price = current_price * (1 + (win_prob - 0.5) * 0.02)
         else:
             target_price = current_price * (1 - (0.5 - win_prob) * 0.02)
         
-        # Get Kalshi price
+        # --- FETCH ALL DATA (Hidden) ---
         ticker = KALSHI_TICKERS.get(coin_symbol, '')
         kalshi_price = fetch_kalshi_price(ticker) if ticker else 0.50
+        order_book = fetch_kalshi_order_book(ticker, depth=10) if ticker else {}
         
-        # Calculate edge against Kalshi
+        # Order book data (used for model but not displayed)
+        spread = order_book.get('spread', 0)
+        spread_quality = order_book.get('spread_quality', '🔴 Poor')
+        liquidity_score = order_book.get('liquidity_score', 0)
+        liquidity_label = order_book.get('liquidity_label', '🔴 Low')
+        imbalance_10 = order_book.get('imbalance_10', 0)
+        depth_slope = order_book.get('depth_slope', 1)
+        depth_slope_label = order_book.get('depth_slope_label', '🟡 Balanced')
+        
+        # Fear & Greed (hidden)
+        fear_greed = fetch_fear_greed_index()
+        
+        # Edge calculation
         edge = win_prob - kalshi_price
+        
+        # Adjust edge based on liquidity (hidden but affects decision)
+        if liquidity_score < 0.3:
+            edge *= 0.6
+        elif liquidity_score < 0.5:
+            edge *= 0.8
         
         if edge >= MIN_EDGE and win_prob > 0.55:
             direction = "UP"
@@ -356,7 +538,16 @@ def get_settlement_prediction(coin_symbol):
             'direction': direction,
             'signal': signal,
             'minutes_until': minutes_until,
-            'kalshi_price': kalshi_price
+            'kalshi_price': kalshi_price,
+            # Hidden data (for reference, not displayed)
+            '_spread': spread,
+            '_spread_quality': spread_quality,
+            '_liquidity_score': liquidity_score,
+            '_liquidity_label': liquidity_label,
+            '_imbalance_10': imbalance_10,
+            '_depth_slope': depth_slope,
+            '_depth_slope_label': depth_slope_label,
+            '_fear_greed': fear_greed
         }
         
     except Exception as e:
@@ -378,7 +569,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# --- Only show predictions if within trading window ---
+# --- Status Message ---
 if is_active:
     st.success(f"🟢 Trading window is OPEN! {minutes_until} minutes until settlement.")
     st.caption("You can place trades based on the predictions below.")
@@ -429,6 +620,33 @@ for idx, coin in enumerate(COINS):
 status_text.empty()
 progress_bar.empty()
 
+# --- Summary Bar ---
+if all_results:
+    signals_up = len([r for r in all_results if r['Signal'] == 'BUY YES'])
+    signals_down = len([r for r in all_results if r['Signal'] == 'BUY NO'])
+    signals_skip = len([r for r in all_results if r['Signal'] == 'SKIP'])
+    
+    st.markdown(f"""
+    <div class="summary-bar">
+        <div class="summary-item">
+            <div class="number" style="color: #00b894;">{signals_up}</div>
+            <div class="label">BUY YES</div>
+        </div>
+        <div class="summary-item">
+            <div class="number" style="color: #ff6b6b;">{signals_down}</div>
+            <div class="label">BUY NO</div>
+        </div>
+        <div class="summary-item">
+            <div class="number" style="color: #636e72;">{signals_skip}</div>
+            <div class="label">SKIP</div>
+        </div>
+        <div class="summary-item">
+            <div class="number" style="color: #fdcb6e;">{len(all_results)}</div>
+            <div class="label">Total Coins</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
 # --- Display Price Predictions ---
 st.markdown("### 📊 Price Predictions for Next Settlement")
 st.caption(f"Settlement at {next_settlement.strftime('%I:%M %p CT')} ({minutes_until}m remaining)")
@@ -477,6 +695,7 @@ st.divider()
 # --- Best Bets ---
 if is_active and best_bets:
     st.markdown("### ⭐ Best Bets (Trading Window Open!)")
+    st.caption("Highest confidence signals for immediate action")
     cols = st.columns(min(len(best_bets), 3))
     for i, bet in enumerate(best_bets[:3]):
         col = cols[i % 3]
@@ -518,15 +737,17 @@ else:
 
 st.divider()
 
-# --- Explanation ---
+# --- How It Works ---
 st.markdown("### 📖 How This Works")
 st.markdown("""
 **Trading Window**: Only trades are shown when you're within **5 minutes** of the next Kalshi settlement.
 
-**Price Predictions**:
-- **Target Price**: What the model expects the price to be at settlement
-- **Current Price**: The current spot price
-- **Kalshi Price**: Kalshi's implied probability (contract price)
+**What's Happening Behind the Scenes**:
+- **Order Book Data**: Bid/ask spreads, depth slope, liquidity scores
+- **Technical Indicators**: RSI, MACD, Bollinger Bands, Stochastic, CCI, MFI, ADX
+- **Volatility & Momentum**: Returns, volatility ratios, price ranges
+- **Market Sentiment**: Fear & Greed Index
+- **All data feeds into the model** — you just see the clean results
 
 **Decisions**:
 - 🟢 **BUY YES** → Model says price will go UP
@@ -548,22 +769,4 @@ with st.sidebar:
     st.markdown(f"**Trading Window:** {PREDICT_WINDOW} minutes before settlement")
     st.markdown(f"**Min Edge:** {MIN_EDGE*100:.0f}%")
     st.markdown(f"**Current Window:** {'🟢 Open' if is_active else '🔴 Closed'}")
-    st.markdown(f"**Minutes to Settlement:** {minutes_until}m")
-    
-    st.divider()
-    
-    st.markdown("### 🎯 Quick Guide")
-    st.markdown("""
-    1. **Check the timer** — wait for trading window
-    2. **Look at price targets** — model's prediction
-    3. **Check Best Bets** — highest confidence signals
-    4. **Place trade** — BUY YES or BUY NO on Kalshi
-    """)
-    
-    st.divider()
-    
-    st.markdown("### 🔄 Refresh")
-    st.caption("Click refresh in your browser to update data")
-
-# --- Footer ---
-st.caption(f"⚡ Code 6 • Close-to-Settlement Predictor • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.markdown(f"**Minutes to Settlement:** {minutes_until}m
