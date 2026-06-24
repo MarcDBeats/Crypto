@@ -1,13 +1,14 @@
 # ============================================
-# CODE 2: ENHANCED KALSHI EDGE DETECTOR (FULLY FIXED)
-# Simplified feature set | Robust fallbacks | Working predictions
+# CODE 3: COMPLETE KALSHI EDGE DETECTOR
+# Features: Order Book | Liquidity | Microstructure | Backtesting
+#           Log Returns | Abs Features | Advanced Indicators
 # ============================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -16,7 +17,7 @@ warnings.filterwarnings('ignore')
 
 # --- Page Config ---
 st.set_page_config(
-    page_title="Enhanced Kalshi Edge Detector",
+    page_title="Kalshi Edge Detector Pro",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -94,6 +95,18 @@ st.markdown("""
         color: #b2bec3;
         font-weight: 600;
     }
+    .liquidity-high {
+        color: #00b894;
+        font-weight: 700;
+    }
+    .liquidity-medium {
+        color: #fdcb6e;
+        font-weight: 700;
+    }
+    .liquidity-low {
+        color: #ff6b6b;
+        font-weight: 700;
+    }
     .stDataFrame {
         border-radius: 0.5rem;
         overflow: hidden;
@@ -102,8 +115,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- Header ---
-st.markdown('<div class="main-header">📊 Enhanced Kalshi Edge Detector</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.markdown('<div class="main-header">📊 Kalshi Edge Detector Pro</div>', unsafe_allow_html=True)
+st.caption(f"⚡ Order Book • Liquidity • Microstructure • Backtesting • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
 BANKROLL = 100.00
@@ -132,7 +145,7 @@ COIN_METADATA = {
 }
 
 # --- Data Fetching ---
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=10)
 def fetch_yahoo_data(symbol):
     try:
         ticker = yf.Ticker(symbol)
@@ -152,7 +165,7 @@ def fetch_yahoo_data(symbol):
     except:
         return pd.DataFrame()
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=10)
 def fetch_kalshi_price(ticker):
     try:
         url = f"https://external-api.kalshi.com/trade-api/v2/markets/{ticker}"
@@ -171,6 +184,68 @@ def fetch_kalshi_price(ticker):
             return None
     except:
         return None
+
+@st.cache_data(ttl=5)
+def fetch_kalshi_order_book(ticker):
+    """Fetch full order book data from Kalshi"""
+    try:
+        url = f"https://external-api.kalshi.com/trade-api/v2/markets/{ticker}/orderbook"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        book = data.get('orderbook_fp', {})
+        
+        yes_bids = book.get('yes_dollars', [])
+        no_bids = book.get('no_dollars', [])
+        
+        # Get best bid/ask
+        best_yes_bid = float(yes_bids[0][0]) if yes_bids else 0
+        best_no_bid = float(no_bids[0][0]) if no_bids else 0
+        
+        # Calculate spread
+        spread = best_yes_bid - best_no_bid if best_yes_bid and best_no_bid else 0
+        
+        # Calculate volume at top 5 levels
+        yes_volume = sum([float(p[1]) for p in yes_bids[:5]]) if yes_bids else 0
+        no_volume = sum([float(p[1]) for p in no_bids[:5]]) if no_bids else 0
+        
+        # Calculate imbalance
+        total_volume = yes_volume + no_volume
+        imbalance = (yes_volume - no_volume) / (total_volume + 1) if total_volume > 0 else 0
+        
+        # Calculate liquidity score (0-1)
+        # Higher is better — based on spread and volume
+        if spread > 0:
+            liquidity_score = max(0, min(1, 1 - (spread / 0.10)))  # 0.10 spread = 0 liquidity
+        else:
+            liquidity_score = 1.0
+        
+        # Adjust by volume
+        if total_volume < 100:
+            liquidity_score *= 0.5
+        elif total_volume < 1000:
+            liquidity_score *= 0.8
+        
+        return {
+            'best_yes_bid': best_yes_bid,
+            'best_no_bid': best_no_bid,
+            'spread': spread,
+            'yes_volume': yes_volume,
+            'no_volume': no_volume,
+            'imbalance': imbalance,
+            'liquidity_score': liquidity_score,
+            'depth': len(yes_bids) + len(no_bids)
+        }
+    except:
+        return {
+            'best_yes_bid': 0,
+            'best_no_bid': 0,
+            'spread': 0,
+            'yes_volume': 0,
+            'no_volume': 0,
+            'imbalance': 0,
+            'liquidity_score': 0,
+            'depth': 0
+        }
 
 @st.cache_data(ttl=3600)
 def fetch_fear_greed_index():
@@ -258,9 +333,8 @@ def add_enhanced_indicators(df):
     
     return df
 
-# --- GET MODEL PROBABILITY (FIXED) ---
+# --- GET MODEL PROBABILITY ---
 def get_model_probability(coin_symbol, window_minutes, df_clean=None):
-    """Get the model's probability estimate using enhanced features"""
     try:
         if df_clean is None:
             df = fetch_yahoo_data(coin_symbol)
@@ -272,7 +346,6 @@ def get_model_probability(coin_symbol, window_minutes, df_clean=None):
         if len(df_clean) < 60:
             return None
         
-        # --- SIMPLIFIED FEATURE SET (works with less data) ---
         feature_cols = [
             'close', 'volume', 
             'log_return', 'abs_log_return',
@@ -300,24 +373,13 @@ def get_model_probability(coin_symbol, window_minutes, df_clean=None):
         X_train = X_df_clean[available_cols].values
         y_train = X_df_clean['target'].values
         
-        # --- FALLBACK: Try XGBoost, fallback to Random Forest ---
         try:
             from xgboost import XGBClassifier
-            model = XGBClassifier(
-                n_estimators=30,
-                max_depth=3,
-                learning_rate=0.1,
-                random_state=42,
-                use_label_encoder=False
-            )
+            model = XGBClassifier(n_estimators=30, max_depth=3, learning_rate=0.1, random_state=42, use_label_encoder=False)
             model.fit(X_train, y_train)
         except:
             from sklearn.ensemble import RandomForestClassifier
-            model = RandomForestClassifier(
-                n_estimators=30,
-                max_depth=5,
-                random_state=42
-            )
+            model = RandomForestClassifier(n_estimators=30, max_depth=5, random_state=42)
             model.fit(X_train, y_train)
         
         last_row = df_clean[available_cols].iloc[-1].values.reshape(1, -1)
@@ -327,26 +389,30 @@ def get_model_probability(coin_symbol, window_minutes, df_clean=None):
     except Exception as e:
         return None
 
-# --- Main Loop ---
+# --- MAIN LOOP ---
 all_results = []
 best_bets = []
 
 fear_greed = fetch_fear_greed_index()
 
-# Fetch Kalshi prices
+# Fetch Kalshi prices and order books
 kalshi_prices = {}
+kalshi_order_books = {}
 for coin in COINS:
     ticker = KALSHI_TICKERS.get(coin)
     if ticker:
         price = fetch_kalshi_price(ticker)
         if price:
             kalshi_prices[coin] = price
+        order_book = fetch_kalshi_order_book(ticker)
+        if order_book:
+            kalshi_order_books[coin] = order_book
 
 progress_bar = st.progress(0)
 status_text = st.empty()
 
 for idx, coin in enumerate(COINS):
-    status_text.text(f"🔄 Analyzing {coin} with enhanced features...")
+    status_text.text(f"🔄 Analyzing {coin} with order book data...")
     
     try:
         df = fetch_yahoo_data(coin)
@@ -359,16 +425,30 @@ for idx, coin in enumerate(COINS):
         if len(df_clean) < 60:
             continue
         
-        # Get model probabilities for 5m and 15m
+        # Get model probabilities
         prob_5m = get_model_probability(coin, 5, df_clean)
         prob_15m = get_model_probability(coin, 15, df_clean)
         
         # Get Kalshi market price (with fallback)
         market_price = kalshi_prices.get(coin, 0.50)
         
+        # Get order book data (with fallback)
+        order_book = kalshi_order_books.get(coin, {})
+        spread = order_book.get('spread', 0)
+        liquidity_score = order_book.get('liquidity_score', 0)
+        imbalance = order_book.get('imbalance', 0)
+        depth = order_book.get('depth', 0)
+        yes_volume = order_book.get('yes_volume', 0)
+        no_volume = order_book.get('no_volume', 0)
+        
         # Calculate edges
         edge_5m = prob_5m - market_price if prob_5m else 0
         edge_15m = prob_15m - market_price if prob_15m else 0
+        
+        # Adjust edge based on liquidity (if liquidity is low, edge is less valuable)
+        if liquidity_score < 0.3:
+            edge_5m *= 0.7
+            edge_15m *= 0.7
         
         # --- DECISION LOGIC ---
         if prob_5m and edge_5m >= MIN_EDGE:
@@ -397,6 +477,17 @@ for idx, coin in enumerate(COINS):
             direction_15m = "WAIT"
             is_signal_15m = False
         
+        # Liquidity assessment
+        if liquidity_score >= 0.7:
+            liquidity_label = "🟢 High"
+            liquidity_class = "liquidity-high"
+        elif liquidity_score >= 0.4:
+            liquidity_label = "🟡 Medium"
+            liquidity_class = "liquidity-medium"
+        else:
+            liquidity_label = "🔴 Low"
+            liquidity_class = "liquidity-low"
+        
         # Calculate actual changes
         if len(df_clean) > 5:
             change_5m = ((df_clean['close'].iloc[-1] - df_clean['close'].iloc[-6]) / df_clean['close'].iloc[-6]) * 100
@@ -418,6 +509,15 @@ for idx, coin in enumerate(COINS):
             'Price_Str': f"${current_price:.2f}",
             'Market_Price': market_price,
             'Market_Price_Str': f"{market_price:.3f}",
+            'Spread': spread,
+            'Spread_Str': f"{spread:.3f}",
+            'Imbalance': imbalance,
+            'Imbalance_Str': f"{imbalance:.3f}",
+            'Liquidity': liquidity_label,
+            'Liquidity_Score': liquidity_score,
+            'Depth': depth,
+            'Yes_Volume': yes_volume,
+            'No_Volume': no_volume,
             'Prob_5m': prob_5m,
             'Prob_5m_Str': f"{prob_5m:.0%}" if prob_5m else '—',
             'Edge_5m': edge_5m,
@@ -509,13 +609,16 @@ for i, result in enumerate(all_results):
                 <div class="coin-stats">
                     Model 5m: {result['Prob_5m_Str']} | 15m: {result['Prob_15m_Str']}
                 </div>
+                <div class="coin-stats">
+                    Liquidity: {result['Liquidity']}
+                </div>
             </div>
             """, unsafe_allow_html=True)
 
 st.divider()
 
 # --- Detailed Table ---
-st.markdown("### 📈 Detailed Edge Analysis (Enhanced Features)")
+st.markdown("### 📈 Detailed Edge Analysis (with Order Book Data)")
 
 if all_results:
     df_display = pd.DataFrame([{
@@ -523,6 +626,9 @@ if all_results:
         'Symbol': r['Symbol'],
         'Price': r['Price_Str'],
         'Kalshi Price': r['Market_Price_Str'],
+        'Spread': r['Spread_Str'],
+        'Imbalance': r['Imbalance_Str'],
+        'Liquidity': r['Liquidity'],
         'Model 5m': r['Prob_5m_Str'],
         'Edge 5m': r['Edge_5m_Str'],
         'Decision 5m': r['Decision_5m'],
@@ -571,6 +677,14 @@ if best_bets:
         else:
             continue
         
+        # Liquidity indicator
+        if bet['Liquidity_Score'] >= 0.7:
+            liquidity_emoji = "🟢"
+        elif bet['Liquidity_Score'] >= 0.4:
+            liquidity_emoji = "🟡"
+        else:
+            liquidity_emoji = "🔴"
+        
         with col:
             st.markdown(f"""
             <div class="{card_class}">
@@ -587,6 +701,10 @@ if best_bets:
                     <span>Model: {prob}</span>
                     <span>Kalshi: {bet['Market_Price_Str']}</span>
                 </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
+                    <span>Spread: {bet['Spread_Str']}</span>
+                    <span>Liquidity: {liquidity_emoji} {bet['Liquidity']}</span>
+                </div>
             </div>
             """, unsafe_allow_html=True)
 else:
@@ -598,41 +716,53 @@ else:
 
 st.divider()
 
-# --- Sidebar ---
-with st.sidebar:
-    st.markdown("### ⚙️ Settings")
-    st.markdown(f"**Bankroll:** ${BANKROLL:.2f}")
-    st.markdown(f"**Max Risk/Trade:** {MAX_RISK_PER_TRADE*100:.0f}%")
-    st.markdown(f"**Min Edge:** {MIN_EDGE*100:.0f}%")
-    
-    st.divider()
-    
-    st.markdown("### 🆕 Enhanced Features")
-    st.markdown("""
-    ✅ **Log Returns** (fixes non-stationarity)  
-    ✅ **Absolute Features** (linearizes non-linear relationships)  
-    ✅ **Advanced Indicators** (ATR, MFI, BB Width)  
-    ✅ **XGBoost + Random Forest Fallback**  
-    """)
-    
-    st.divider()
-    
-    st.markdown("### 🎯 How It Works")
-    st.markdown("""
-    1. **Model Estimate** — Enhanced ML predicts probability of price increase  
-    2. **Kalshi Price** — Market's implied probability (YES contract price)  
-    3. **Edge Calculation** — Model - Kalshi Price  
-    4. **Decision**:
-       - Edge > 5% → **BUY YES**
-       - Edge < -5% → **BUY NO**
-       - Otherwise → **SKIP**
-    """)
-    
-    st.divider()
-    
-    st.markdown("### 🔄 Auto-Refresh")
-    st.caption("Refreshes every 30 seconds")
+# ============================================
+# 🧪 BACKTESTING ENGINE
+# ============================================
 
-# --- Footer ---
-st.divider()
-st.caption(f"⚡ Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Enhanced with Log Returns, Abs Features, XGBoost")
+st.markdown("### 🧪 Backtest Your Strategy")
+st.caption("Test your model on historical data to see how it would have performed.")
+
+# --- Backtest Settings ---
+backtest_col1, backtest_col2, backtest_col3, backtest_col4 = st.columns(4)
+
+with backtest_col1:
+    backtest_coin = st.selectbox("Coin:", COINS, key="backtest_coin")
+with backtest_col2:
+    backtest_period = st.selectbox("Period:", ["7 Days", "14 Days", "30 Days", "60 Days", "90 Days"], key="backtest_period")
+with backtest_col3:
+    backtest_min_edge = st.number_input("Min Edge (%):", min_value=0, max_value=20, value=5, key="backtest_edge") / 100
+with backtest_col4:
+    backtest_bet_type = st.selectbox("Bet Size:", ["Fixed $1", "Fixed $5", "Kelly Criterion"], key="backtest_bet")
+
+# --- Run Backtest Button ---
+if st.button("▶️ Run Backtest", type="primary"):
+    with st.spinner("Running backtest... This may take 30-60 seconds."):
+        
+        # --- 1. Fetch historical data ---
+        days_map = {"7 Days": 7, "14 Days": 14, "30 Days": 30, "60 Days": 60, "90 Days": 90}
+        days = days_map[backtest_period]
+        
+        ticker = yf.Ticker(backtest_coin)
+        df_hist = ticker.history(period=f"{days + 2}d", interval="1m")
+        
+        if df_hist.empty:
+            st.error("No historical data available. Please try another coin.")
+        else:
+            df_hist = df_hist.reset_index()
+            df_hist = df_hist.rename(columns={
+                'Datetime': 'time',
+                'Open': 'open',
+                'High': 'high',
+                'Low': 'low',
+                'Close': 'close',
+                'Volume': 'volume'
+            })
+            
+            df_hist = add_enhanced_indicators(df_hist)
+            df_hist_clean = df_hist.dropna()
+            
+            if len(df_hist_clean) < 100:
+                st.error("Not enough clean data for backtesting. Try a longer period.")
+            else:
+                # --- 2. Run backtest simulation ---
