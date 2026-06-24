@@ -771,4 +771,219 @@ for i, result in enumerate(all_results):
             
             # Kalshi trade link
             ticker = KALSHI_TICKERS.get(f"{result['Name']}-USD", "")
-            trade_link = f"https://kalshi.com/market/{ticker}" if
+            trade_link = f"https://kalshi.com/market/{ticker}" if ticker else "#"
+            
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="coin-name">{result['Name']} ({result['Symbol']})</div>
+                <div class="coin-price">{result['Price_Str']}</div>
+                <div style="font-size: 0.8rem; color: #888;">
+                    Kalshi: {result['Market_Price_Str']}
+                </div>
+                <div class="edge-display {edge_class}">
+                    Edge: {edge_display}
+                </div>
+                <div style="display: flex; justify-content: center; gap: 0.5rem; margin-top: 0.3rem;">
+                    <span style="font-size: 0.7rem; color: #888;">5m:</span>
+                    <span style="font-size: 0.8rem; font-weight: 600; color: {dir_color};">
+                        {dir_display}
+                    </span>
+                    <span style="font-size: 0.7rem; color: #888;">| 15m:</span>
+                    <span style="font-size: 0.8rem; font-weight: 600; color: {'#00b894' if result['Direction_15m'] == 'YES' else '#ff6b6b' if result['Direction_15m'] == 'NO' else '#fdcb6e' if result['Direction_15m'] == 'FLAT' else '#888'};">
+                        {'⬆️ YES' if result['Direction_15m'] == 'YES' else '⬇️ NO' if result['Direction_15m'] == 'NO' else '⏸️ FLAT' if result['Direction_15m'] == 'FLAT' else '⏳ WAIT'}
+                    </span>
+                </div>
+                <div class="coin-stats">
+                    Model 5m: {result['Prob_5m_Str']} | 15m: {result['Prob_15m_Str']}
+                </div>
+                <div class="coin-stats">
+                    Liquidity: {result['Liquidity']} | Spread: {result['Spread_Quality']}
+                </div>
+                <a href="{trade_link}" target="_blank" class="trade-button">🚀 Trade on Kalshi</a>
+            </div>
+            """, unsafe_allow_html=True)
+
+st.divider()
+
+# --- Quick Filter Buttons ---
+st.markdown("### 📈 Detailed Edge Analysis")
+filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([1, 1, 1, 3])
+with filter_col1:
+    show_all = st.button("🔴 Show All", key="show_all")
+with filter_col2:
+    show_signals = st.button("🟢 Signals Only", key="show_signals")
+with filter_col3:
+    show_best = st.button("⭐ Best Bets", key="show_best")
+
+# Default filter
+filter_option = "all"
+if show_signals:
+    filter_option = "signals"
+elif show_best:
+    filter_option = "best"
+elif show_all:
+    filter_option = "all"
+
+# --- Detailed Table ---
+if all_results:
+    df_display = pd.DataFrame([{
+        'Coin': r['Name'],
+        'Symbol': r['Symbol'],
+        'Price': r['Price_Str'],
+        'Kalshi Price': r['Market_Price_Str'],
+        'Spread': r['Spread_Str'],
+        'Spread Quality': r['Spread_Quality'],
+        'Imbalance (5)': r['Imbalance_5_Str'],
+        'Imbalance (10)': r['Imbalance_10_Str'],
+        'Microprice': r['Microprice_Str'],
+        'Liquidity': r['Liquidity'],
+        'Regime': r['Regime'],
+        'Model 5m': r['Prob_5m_Str'],
+        'Edge 5m': r['Edge_5m_Str'],
+        'Decision 5m': r['Decision_5m'],
+        'Model 15m': r['Prob_15m_Str'],
+        'Edge 15m': r['Edge_15m_Str'],
+        'Decision 15m': r['Decision_15m'],
+        '5m Change': f"{r['Change_5m']:+.1f}%",
+        '15m Change': f"{r['Change_15m']:+.1f}%"
+    } for r in all_results])
+    
+    # Apply filter
+    if filter_option == "signals":
+        df_display = df_display[df_display['Decision 5m'] != 'SKIP']
+        st.info("🟢 Showing only coins with signals.")
+    elif filter_option == "best":
+        df_display = df_display[df_display['Decision 5m'].isin(['BUY YES', 'BUY NO'])]
+        st.success("⭐ Showing only Best Bets.")
+    
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
+else:
+    st.warning("No predictions available. Please check data sources.")
+
+st.divider()
+
+# --- Best Bets ---
+st.markdown("### ⭐ Best Bets")
+
+if best_bets:
+    cols = st.columns(min(len(best_bets), 3))
+    for i, bet in enumerate(best_bets[:6]):
+        col = cols[i % 3]
+        
+        if bet['Is_Signal_5m']:
+            decision = bet['Decision_5m']
+            direction = bet['Direction_5m']
+            prob = bet['Prob_5m_Str']
+            edge = bet['Edge_5m_Str']
+            timeframe = "5m"
+        elif bet['Is_Signal_15m']:
+            decision = bet['Decision_15m']
+            direction = bet['Direction_15m']
+            prob = bet['Prob_15m_Str']
+            edge = bet['Edge_15m_Str']
+            timeframe = "15m"
+        else:
+            continue
+        
+        if "YES" in decision:
+            card_class = "best-bet"
+            emoji = "🟢"
+        elif "NO" in decision:
+            card_class = "best-bet-no"
+            emoji = "🔴"
+        else:
+            continue
+        
+        ticker = KALSHI_TICKERS.get(f"{bet['Name']}-USD", "")
+        trade_link = f"https://kalshi.com/market/{ticker}" if ticker else "#"
+        
+        with col:
+            st.markdown(f"""
+            <div class="{card_class}">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 1.2rem;">{bet['Name']} ({bet['Symbol']})</span>
+                    <span style="font-size: 1.5rem;">{emoji} {direction}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
+                    <span>Decision: {decision}</span>
+                    <span>Edge: {edge}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
+                    <span>Time: {timeframe}</span>
+                    <span>Model: {prob}</span>
+                    <span>Kalshi: {bet['Market_Price_Str']}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
+                    <span>Spread: {bet['Spread_Str']}</span>
+                    <span>Liquidity: {bet['Liquidity']}</span>
+                </div>
+                <a href="{trade_link}" target="_blank" class="trade-button" style="font-size: 0.8rem;">🚀 Trade Now</a>
+            </div>
+            """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <div class="skip-bet">
+        ⏳ No edges meet the minimum threshold. Waiting for better opportunities...
+    </div>
+    """, unsafe_allow_html=True)
+
+st.divider()
+
+# --- Sidebar ---
+with st.sidebar:
+    st.markdown("### ⚙️ Settings")
+    st.markdown(f"**Bankroll:** ${BANKROLL:.2f}")
+    st.markdown(f"**Max Risk/Trade:** {MAX_RISK_PER_TRADE*100:.0f}%")
+    st.markdown(f"**Min Edge:** {MIN_EDGE*100:.0f}%")
+    st.markdown(f"**Flat Threshold:** {FLAT_THRESHOLD*100:.1f}%")
+    
+    st.divider()
+    
+    st.markdown("### 🆕 Code 5 Features")
+    st.markdown("""
+    ✅ **Order Book (10 Levels)**  
+    ✅ **Aggregate Imbalance** (Top 5 & 10 levels)  
+    ✅ **Microprice** (Weighted average)  
+    ✅ **Spread Quality** (Excellent/Good/Poor)  
+    ✅ **Enhanced Liquidity Score**  
+    ✅ **Market Regime Banner**  
+    ✅ **Ternary Classification** (UP/DOWN/FLAT)  
+    ✅ **Depth Slope Analysis**  
+    ✅ **One-Click Kalshi Links**  
+    ✅ **Quick Filter Buttons**  
+    ✅ **Signal Summary Bar**  
+    """)
+    
+    st.divider()
+    
+    st.markdown("### 🎯 How It Works")
+    st.markdown("""
+    1. **Model Estimate** — Enhanced ML predicts probability  
+    2. **Kalshi Price** — Market's implied probability  
+    3. **Order Book** — 10 levels of bid/ask data  
+    4. **Microstructure Features** — Imbalance, Microprice, Depth  
+    5. **Ternary Classification** — UP if edge > threshold, DOWN if edge < -threshold, FLAT otherwise  
+    6. **Decision**:
+       - Edge > 5% → **BUY YES**
+       - Edge < -5% → **BUY NO**
+       - Otherwise → **SKIP** or **FLAT**
+    """)
+    
+    st.divider()
+    
+    st.markdown("### 📚 Data Sources")
+    st.markdown("""
+    ✅ Yahoo Finance (Price Data)  
+    ✅ Kalshi API (Price + Order Book)  
+    ✅ Alternative.me (Fear & Greed)  
+    ✅ XGBoost/Random Forest (ML)  
+    """)
+    
+    st.divider()
+    
+    st.markdown("### 🔄 Manual Refresh")
+    st.caption("Press 'R' or click the refresh button in your browser to get the latest data.")
+
+# --- Footer ---
+st.divider()
+st.caption(f"⚡ Code 5 • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} • Order Book (10 Levels) • Microprice")
