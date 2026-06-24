@@ -591,21 +591,23 @@ def get_next_contract_target(df_clean, coin_symbol, predict_window=15):
         current_price = df_clean['close'].iloc[-1]
         current_time = df_clean['time'].iloc[-1]
         
+        # --- FIX: Round to nearest Kalshi settlement time (:00, :15, :30, :45) ---
         minute = current_time.minute
-        next_minute = ((minute // 15) + 1) * 15
-        if next_minute == 60:
-            next_minute = 0
-            next_hour = current_time.hour + 1
-        else:
-            next_hour = current_time.hour
+        # Calculate minutes to next Kalshi settlement
+        minutes_to_next = (15 - (minute % 15)) % 15
+        if minutes_to_next == 0:
+            minutes_to_next = 15  # If exactly on a settlement, go to next one
         
-        next_settlement = current_time.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
-        if next_settlement <= current_time:
-            next_settlement += timedelta(hours=1)
+        next_settlement = current_time + timedelta(minutes=minutes_to_next)
+        next_settlement = next_settlement.replace(second=0, microsecond=0)
         
-        minutes_until = int((next_settlement - current_time).total_seconds() / 60)
-        if minutes_until < 1:
-            minutes_until = 5
+        minutes_until = minutes_to_next
+        
+        # --- If less than 2 minutes to settlement, use the next one ---
+        if minutes_until < 2:
+            minutes_until = 15
+            next_settlement = current_time + timedelta(minutes=15)
+            next_settlement = next_settlement.replace(second=0, microsecond=0)
         
         feature_cols = [
             'close', 'volume', 'log_return', 'abs_log_return',
