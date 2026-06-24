@@ -766,3 +766,269 @@ if st.button("▶️ Run Backtest", type="primary"):
                 st.error("Not enough clean data for backtesting. Try a longer period.")
             else:
                 # --- 2. Run backtest simulation ---
+                trades = []
+                equity_curve = []
+                balance = 100.00
+                window_size = 60
+                
+                for i in range(window_size, len(df_hist_clean) - 15):
+                    data_slice = df_hist_clean.iloc[:i+1]
+                    
+                    if len(data_slice) < 60:
+                        continue
+                    
+                    feature_cols = [
+                        'close', 'volume', 
+                        'log_return', 'abs_log_return',
+                        'sma_5', 'sma_10', 
+                        'rsi', 'macd_hist', 
+                        'bb_position', 'atr', 
+                        'return_1', 'return_5'
+                    ]
+                    
+                    available_cols = [col for col in feature_cols if col in data_slice.columns]
+                    
+                    if len(available_cols) < 5:
+                        continue
+                    
+                    X = data_slice[available_cols].values
+                    y = data_slice['close'].shift(-5) > data_slice['close']
+                    
+                    X_df = pd.DataFrame(X, columns=available_cols)
+                    X_df['target'] = y.astype(int)
+                    X_df_clean = X_df.dropna()
+                    
+                    if len(X_df_clean) < 20:
+                        continue
+                    
+                    X_train = X_df_clean[available_cols].values
+                    y_train = X_df_clean['target'].values
+                    
+                    try:
+                        from xgboost import XGBClassifier
+                        model = XGBClassifier(n_estimators=30, max_depth=3, learning_rate=0.1, random_state=42, use_label_encoder=False)
+                        model.fit(X_train, y_train)
+                    except:
+                        from sklearn.ensemble import RandomForestClassifier
+                        model = RandomForestClassifier(n_estimators=30, max_depth=5, random_state=42)
+                        model.fit(X_train, y_train)
+                    
+                    last_row = data_slice[available_cols].iloc[-1].values.reshape(1, -1)
+                    win_prob = model.predict_proba(last_row)[0][1]
+                    
+                    current_price = data_slice['close'].iloc[-1]
+                    market_price = 0.50
+                    
+                    edge = win_prob - market_price
+                    
+                    if edge >= backtest_min_edge:
+                        action = "BUY YES"
+                        direction = "YES"
+                    elif edge <= -backtest_min_edge:
+                        action = "BUY NO"
+                        direction = "NO"
+                    else:
+                        action = "SKIP"
+                        direction = "WAIT"
+                    
+                    if action != "SKIP":
+                        if backtest_bet_type == "Kelly Criterion":
+                            bet_size = (abs(edge) / (1 - market_price)) * balance
+                            bet_size = min(bet_size, balance * 0.02)
+                        elif backtest_bet_type == "Fixed $1":
+                            bet_size = 1.00
+                        else:
+                            bet_size = 5.00
+                        
+                        bet_size = max(bet_size, 0.01)
+                        bet_size = min(bet_size, balance)
+                        
+                        entry_price = current_price
+                        entry_time = data_slice['time'].iloc[-1]
+                        
+                        future_price = data_slice['close'].iloc[i+5] if i+5 < len(data_slice) else current_price
+                        
+                        if direction == "YES":
+                            win = future_price > entry_price
+                        else:
+                            win = future_price < entry_price
+                        
+                        if win:
+                            profit = bet_size * 0.95
+                        else:
+                            profit = -bet_size
+                        
+                        balance += profit
+                        
+                        trades.append({
+                            'time': entry_time,
+                            'price': entry_price,
+                            'future_price': future_price,
+                            'direction': direction,
+                            'win_prob': win_prob,
+                            'edge': edge,
+                            'bet_size': bet_size,
+                            'profit': profit,
+                            'win': win
+                        })
+                    
+                    equity_curve.append({
+                        'time': data_slice['time'].iloc[-1],
+                        'balance': balance
+                    })
+                
+                # --- 5. Calculate results ---
+                if trades:
+                    df_trades = pd.DataFrame(trades)
+                    df_equity = pd.DataFrame(equity_curve)
+                    
+                    wins = df_trades[df_trades['win'] == True]
+                    losses = df_trades[df_trades['win'] == False]
+                    
+                    total_trades = len(df_trades)
+                    win_rate = len(wins) / total_trades if total_trades > 0 else 0
+                    total_profit = df_trades['profit'].sum()
+                    max_drawdown = (df_equity['balance'].cummax() - df_equity['balance']).max()
+                    final_balance = df_equity['balance'].iloc[-1] if not df_equity.empty else 100
+                    total_return = ((final_balance - 100) / 100) * 100
+                    
+                    returns = df_equity['balance'].pct_change().dropna()
+                    sharpe = (returns.mean() / returns.std() * np.sqrt(252 * 6.5 * 12)) if returns.std() > 0 else 0
+                    
+                    st.success("Backtest Complete!")
+                    
+                    res_col1, res_col2, res_col3, res_col4 = st.columns(4)
+                    res_col1.metric("Total Trades", total_trades)
+                    res_col2.metric("Win Rate", f"{win_rate:.0%}")
+                    res_col3.metric("Total Profit", f"${total_profit:.2f}", delta=f"{total_return:.1f}%")
+                    res_col4.metric("Final Balance", f"${final_balance:.2f}")
+                    
+                    res2_col1, res2_col2, res2_col3, res2_col4 = st.columns(4)
+                    res2_col1.metric("Avg Profit/Trade", f"${df_trades['profit'].mean():.2f}")
+                    res2_col2.metric("Max Drawdown", f"${max_drawdown:.2f}")
+                    res2_col3.metric("Sharpe Ratio", f"{sharpe:.2f}")
+                    res2_col4.metric("Total Return", f"{total_return:+.1f}%")
+                    
+                    st.subheader("📈 Equity Curve")
+                    fig_equity = go.Figure()
+                    fig_equity.add_trace(go.Scatter(
+                        x=df_equity['time'],
+                        y=df_equity['balance'],
+                        mode='lines',
+                        name='Balance',
+                        line=dict(color='#00b894', width=2)
+                    ))
+                    fig_equity.add_hline(y=100, line_dash="dash", line_color="gray")
+                    fig_equity.update_layout(
+                        title="Portfolio Balance Over Time",
+                        xaxis_title="Time",
+                        yaxis_title="Balance ($)",
+                        height=300,
+                        template='plotly_dark'
+                    )
+                    st.plotly_chart(fig_equity, use_container_width=True)
+                    
+                    st.subheader("📊 Trade Distribution")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        fig_wins = go.Figure(data=[go.Pie(
+                            labels=['Wins', 'Losses'],
+                            values=[len(wins), len(losses)],
+                            marker_colors=['#00b894', '#ff6b6b'],
+                            hole=0.4
+                        )])
+                        fig_wins.update_layout(height=300, template='plotly_dark')
+                        st.plotly_chart(fig_wins, use_container_width=True)
+                    
+                    with col2:
+                        fig_profit = go.Figure(data=[go.Histogram(
+                            x=df_trades['profit'],
+                            nbinsx=20,
+                            marker_color='#667eea'
+                        )])
+                        fig_profit.update_layout(
+                            title="Profit per Trade",
+                            xaxis_title="Profit ($)",
+                            yaxis_title="Count",
+                            height=300,
+                            template='plotly_dark'
+                        )
+                        st.plotly_chart(fig_profit, use_container_width=True)
+                    
+                    with st.expander("📋 View All Trades"):
+                        df_display_trades = df_trades.copy()
+                        df_display_trades['time'] = df_display_trades['time'].dt.strftime('%Y-%m-%d %H:%M')
+                        df_display_trades['win'] = df_display_trades['win'].map({True: '✅ WIN', False: '❌ LOSS'})
+                        df_display_trades = df_display_trades.rename(columns={
+                            'time': 'Time',
+                            'direction': 'Direction',
+                            'win_prob': 'Win Prob',
+                            'edge': 'Edge',
+                            'bet_size': 'Bet Size',
+                            'profit': 'Profit',
+                            'win': 'Result'
+                        })
+                        df_display_trades['Win Prob'] = df_display_trades['Win Prob'].apply(lambda x: f"{x:.0%}")
+                        df_display_trades['Edge'] = df_display_trades['Edge'].apply(lambda x: f"{x:.0%}")
+                        df_display_trades['Bet Size'] = df_display_trades['Bet Size'].apply(lambda x: f"${x:.2f}")
+                        df_display_trades['Profit'] = df_display_trades['Profit'].apply(lambda x: f"${x:.2f}")
+                        st.dataframe(df_display_trades, use_container_width=True, hide_index=True)
+                    
+                else:
+                    st.warning("No trades were generated during the backtest period. Try adjusting the minimum edge or using a different coin.")
+
+st.divider()
+
+# --- Sidebar ---
+with st.sidebar:
+    st.markdown("### ⚙️ Settings")
+    st.markdown(f"**Bankroll:** ${BANKROLL:.2f}")
+    st.markdown(f"**Max Risk/Trade:** {MAX_RISK_PER_TRADE*100:.0f}%")
+    st.markdown(f"**Min Edge:** {MIN_EDGE*100:.0f}%")
+    
+    st.divider()
+    
+    st.markdown("### 🆕 Code 3 Features")
+    st.markdown("""
+    ✅ **Order Book Integration** (Bid/Ask, Spread, Depth)  
+    ✅ **Liquidity Score** (Measures entry/exit ease)  
+    ✅ **Market Microstructure** (Imbalance, Volume)  
+    ✅ **Edge Adjustments** (Liquidity-weighted edges)  
+    ✅ **Backtesting Engine** (Test on historical data)  
+    ✅ **Log Returns & Abs Features**  
+    ✅ **Advanced Technical Indicators**  
+    """)
+    
+    st.divider()
+    
+    st.markdown("### 🎯 How It Works")
+    st.markdown("""
+    1. **Model Estimate** — Enhanced ML predicts probability  
+    2. **Kalshi Price** — Market's implied probability  
+    3. **Order Book** — Real-time liquidity and depth  
+    4. **Edge Calculation** — Model - Kalshi (adjusted by liquidity)  
+    5. **Decision**:
+       - Edge > 5% → **BUY YES**
+       - Edge < -5% → **BUY NO**
+       - Otherwise → **SKIP**
+    """)
+    
+    st.divider()
+    
+    st.markdown("### 📚 Data Sources")
+    st.markdown("""
+    ✅ Yahoo Finance (Price Data)  
+    ✅ Kalshi API (Price + Order Book)  
+    ✅ Alternative.me (Fear & Greed)  
+    ✅ XGBoost/Random Forest (ML)  
+    """)
+    
+    st.divider()
+    
+    st.markdown("### 🔄 Auto-Refresh")
+    st.caption("Refreshes every 10 seconds (order book data)")
+
+# --- Footer ---
+st.divider()
+st.caption(f"⚡ Code 3 • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} • Order Book • Liquidity • Backtesting")
