@@ -1,8 +1,9 @@
 # ============================================
-# CODE 8: KALSHI PRICE PREDICTOR WITH 5 & 10 MINUTE PREDICTIONS
+# CODE 9: KALSHI PRICE PREDICTOR WITH 5, 10, & 15 MINUTE PREDICTIONS
 # Features: Full data model + Limit Analysis
-#           Separate 5-minute and 10-minute predictions
-#           Compare confidence and direction across time horizons
+#           Separate 5-minute, 10-minute, and 15-minute predictions
+#           Compare confidence and direction across all time horizons
+#           Agreement indicator for all three timeframes
 # ============================================
 
 import streamlit as st
@@ -61,7 +62,7 @@ st.markdown("""
         border-radius: 0.5rem;
         border: 1px solid #3d3d5c;
         text-align: center;
-        min-height: 160px;
+        min-height: 170px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -208,7 +209,7 @@ st.markdown("""
         display: inline-block;
     }
     .timeframe-badge {
-        font-size: 0.6rem;
+        font-size: 0.55rem;
         background: #2d2d44;
         padding: 0.1rem 0.3rem;
         border-radius: 0.2rem;
@@ -217,10 +218,11 @@ st.markdown("""
     }
     .prediction-comparison {
         display: flex;
-        gap: 0.3rem;
+        gap: 0.2rem;
         justify-content: center;
-        font-size: 0.6rem;
+        font-size: 0.55rem;
         margin-top: 0.2rem;
+        flex-wrap: wrap;
     }
     .prediction-comparison .tf-5 {
         color: #667eea;
@@ -230,13 +232,35 @@ st.markdown("""
         color: #fdcb6e;
         font-weight: 600;
     }
+    .prediction-comparison .tf-15 {
+        color: #ff6b6b;
+        font-weight: 600;
+    }
+    .agree-badge {
+        font-size: 0.7rem;
+        padding: 0.1rem 0.4rem;
+        border-radius: 0.3rem;
+        font-weight: 600;
+    }
+    .agree-yes {
+        background: #00b89433;
+        color: #00b894;
+    }
+    .agree-no {
+        background: #ff6b6b33;
+        color: #ff6b6b;
+    }
+    .agree-partial {
+        background: #fdcb6e33;
+        color: #fdcb6e;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
 current_ct = get_current_ct_time()
 st.markdown('<div class="main-header">📊 Kalshi Price Predictor</div>', unsafe_allow_html=True)
-st.caption(f"⚡ 5-min & 10-min predictions • Limit Analysis • All times in CT • Updated: {current_ct.strftime('%Y-%m-%d %H:%M:%S')} CT")
+st.caption(f"⚡ 5-min, 10-min, & 15-min predictions • Limit Analysis • All times in CT • Updated: {current_ct.strftime('%Y-%m-%d %H:%M:%S')} CT")
 
 # --- Settings ---
 BANKROLL = 100.00
@@ -276,6 +300,14 @@ def fmt_confidence(val):
     if val is None or pd.isna(val):
         return '—'
     return f"{val:.0%}"
+
+def get_direction(prob):
+    if prob > 0.55:
+        return "UP"
+    elif prob < 0.45:
+        return "DOWN"
+    else:
+        return "WAIT"
 
 # --- Data Fetching ---
 @st.cache_data(ttl=10)
@@ -697,9 +729,10 @@ def get_full_prediction(coin_symbol):
             'price_range', 'volume_ratio'
         ]
         
-        # --- PREDICTIONS FOR 5 AND 10 MINUTES ---
+        # --- PREDICTIONS FOR 5, 10, AND 15 MINUTES ---
         pred_5 = get_prediction_for_horizon(coin_symbol, 5, df_clean, feature_cols)
         pred_10 = get_prediction_for_horizon(coin_symbol, 10, df_clean, feature_cols)
+        pred_15 = get_prediction_for_horizon(coin_symbol, 15, df_clean, feature_cols)
         
         # --- FETCH KALSHI DATA ---
         ticker = KALSHI_TICKERS.get(coin_symbol, '')
@@ -718,7 +751,7 @@ def get_full_prediction(coin_symbol):
         # Fear & Greed
         fear_greed = fetch_fear_greed_index()
         
-        # --- LIMIT ANALYSIS (using 5-minute horizon for limit) ---
+        # --- LIMIT ANALYSIS (using 5-minute horizon) ---
         limit_data = limit_analysis(coin_symbol, df_clean, feature_cols, 5)
         
         # --- Determine primary signal based on 5-minute prediction ---
@@ -750,6 +783,7 @@ def get_full_prediction(coin_symbol):
             'current_price': current_price,
             'pred_5': pred_5,
             'pred_10': pred_10,
+            'pred_15': pred_15,
             'win_prob': win_prob,
             'edge': edge,
             'direction': direction,
@@ -789,10 +823,10 @@ st.markdown(f"""
 # --- Status Message ---
 if is_active:
     st.success(f"🟢 Trading window is OPEN! {minutes_until} minutes until settlement (CT).")
-    st.caption("Compare 5-minute and 10-minute predictions below.")
+    st.caption("Compare 5-minute, 10-minute, and 15-minute predictions below.")
 else:
     st.warning(f"⏳ Trading window closed. Next window opens in {minutes_until - PREDICT_WINDOW} minutes (CT).")
-    st.caption("Predictions shown for reference only. 5-min vs 10-min comparison available.")
+    st.caption("Predictions shown for reference only. 5-min, 10-min, & 15-min comparison available.")
 
 st.divider()
 
@@ -815,11 +849,27 @@ for idx, coin in enumerate(COINS):
         target_5 = pred['pred_5']['target_price'] if pred['pred_5'] else pred['current_price']
         win_prob_10 = pred['pred_10']['win_prob'] if pred['pred_10'] else 0.50
         target_10 = pred['pred_10']['target_price'] if pred['pred_10'] else pred['current_price']
+        win_prob_15 = pred['pred_15']['win_prob'] if pred['pred_15'] else 0.50
+        target_15 = pred['pred_15']['target_price'] if pred['pred_15'] else pred['current_price']
         
-        # Determine if 5 and 10 minute predictions agree
-        direction_5 = "UP" if win_prob_5 > 0.55 else "DOWN" if win_prob_5 < 0.45 else "WAIT"
-        direction_10 = "UP" if win_prob_10 > 0.55 else "DOWN" if win_prob_10 < 0.45 else "WAIT"
-        agree = direction_5 == direction_10 and direction_5 != "WAIT"
+        # Determine directions
+        direction_5 = get_direction(win_prob_5)
+        direction_10 = get_direction(win_prob_10)
+        direction_15 = get_direction(win_prob_15)
+        
+        # Check agreement across all three
+        all_agree = (direction_5 == direction_10 == direction_15) and direction_5 != "WAIT"
+        partial_agree = (direction_5 == direction_10) and direction_5 != "WAIT"
+        
+        if all_agree:
+            agree_status = "✅ ALL AGREE"
+            agree_class = "agree-yes"
+        elif partial_agree:
+            agree_status = "⚠️ 5 & 10 Agree"
+            agree_class = "agree-partial"
+        else:
+            agree_status = "❌ Disagree"
+            agree_class = "agree-no"
         
         result = {
             'Name': metadata['name'],
@@ -832,9 +882,16 @@ for idx, coin in enumerate(COINS):
             'Win_Prob_10': win_prob_10,
             'Win_Prob_10_Str': fmt_confidence(win_prob_10),
             'Target_10_Str': fmt_price(target_10),
+            'Win_Prob_15': win_prob_15,
+            'Win_Prob_15_Str': fmt_confidence(win_prob_15),
+            'Target_15_Str': fmt_price(target_15),
             'Direction_5': direction_5,
             'Direction_10': direction_10,
-            'Agree': agree,
+            'Direction_15': direction_15,
+            'All_Agree': all_agree,
+            'Partial_Agree': partial_agree,
+            'Agree_Status': agree_status,
+            'Agree_Class': agree_class,
             'Signal': pred['signal'],
             'Edge': pred['edge'],
             'Edge_Str': f"{pred['edge']:.1%}",
@@ -857,7 +914,7 @@ if all_results:
     signals_up = len([r for r in all_results if r['Signal'] == 'BUY YES'])
     signals_down = len([r for r in all_results if r['Signal'] == 'BUY NO'])
     signals_skip = len([r for r in all_results if r['Signal'] == 'SKIP'])
-    agree_count = len([r for r in all_results if r['Agree']])
+    all_agree_count = len([r for r in all_results if r['All_Agree']])
     
     st.markdown(f"""
     <div class="summary-bar">
@@ -874,15 +931,15 @@ if all_results:
             <div class="label">SKIP</div>
         </div>
         <div class="summary-item">
-            <div class="number" style="color: #667eea;">{agree_count}</div>
-            <div class="label">✅ 5 & 10 Agree</div>
+            <div class="number" style="color: #00b894;">{all_agree_count}</div>
+            <div class="label">✅ ALL 3 Agree</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
 st.divider()
 
-# --- Display Price Predictions with 5 & 10 Minute Comparison ---
+# --- Display Price Predictions with 5, 10, & 15 Minute Comparison ---
 st.markdown("### 📊 Price Predictions for Next Settlement")
 st.caption(f"Settlement at {next_settlement.strftime('%I:%M %p CT')} ({minutes_until}m remaining)")
 
@@ -925,10 +982,6 @@ for i, result in enumerate(all_results):
             </div>
             """
         
-        # Agreement indicator
-        agree_emoji = "✅" if result['Agree'] else "⚠️"
-        agree_color = "#00b894" if result['Agree'] else "#fdcb6e"
-        
         st.markdown(f"""
         <div class="price-card {'active-window' if is_active else 'inactive-window'}">
             <div class="coin-name">{result['Name']} ({result['Symbol']})</div>
@@ -937,6 +990,8 @@ for i, result in enumerate(all_results):
                 <span class="tf-5">5m: {result['Win_Prob_5_Str']} → {result['Target_5_Str']}</span>
                 <span style="color:#888;">|</span>
                 <span class="tf-10">10m: {result['Win_Prob_10_Str']} → {result['Target_10_Str']}</span>
+                <span style="color:#888;">|</span>
+                <span class="tf-15">15m: {result['Win_Prob_15_Str']} → {result['Target_15_Str']}</span>
             </div>
             
             <div class="direction {dir_class}">{dir_emoji} {result['Direction_5']}</div>
@@ -947,7 +1002,7 @@ for i, result in enumerate(all_results):
             </div>
             <div class="info-row">
                 <span>Edge: {result['Edge_Str']}</span>
-                <span>{agree_emoji} <span style="color:{agree_color};">{'Agree' if result['Agree'] else 'Disagree'}</span></span>
+                <span><span class="agree-badge {result['Agree_Class']}">{result['Agree_Status']}</span></span>
             </div>
             
             <div class="confidence-bar">
@@ -967,7 +1022,7 @@ st.divider()
 # --- Best Bets ---
 if is_active and best_bets:
     st.markdown("### ⭐ Best Bets (Trading Window Open!)")
-    st.caption("Highest confidence signals for immediate action")
+    st.caption("Highest confidence signals for immediate action — look for ✅ ALL AGREE")
     cols = st.columns(min(len(best_bets), 3))
     for i, bet in enumerate(best_bets[:3]):
         col = cols[i % 3]
@@ -983,8 +1038,6 @@ if is_active and best_bets:
             if bet['Limit_Data']:
                 limit_est = f"Est. Accuracy: {bet['Limit_Data']['limit_estimate']*100:.0f}%"
             
-            agree_emoji = "✅" if bet['Agree'] else "⚠️"
-            
             st.markdown(f"""
             <div class="{card_class}">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -994,10 +1047,11 @@ if is_active and best_bets:
                 <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
                     <span>5m: {bet['Win_Prob_5_Str']}</span>
                     <span>10m: {bet['Win_Prob_10_Str']}</span>
+                    <span>15m: {bet['Win_Prob_15_Str']}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
                     <span>Edge: {bet['Edge_Str']}</span>
-                    <span>{agree_emoji} {'Agree' if bet['Agree'] else 'Disagree'}</span>
+                    <span><span class="agree-badge {bet['Agree_Class']}">{bet['Agree_Status']}</span></span>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
                     <span>{limit_est}</span>
@@ -1026,26 +1080,25 @@ st.markdown("""
 
 **Trading Window**: Only trades are shown when you're within **5 minutes** of the next Kalshi settlement.
 
-**📊 5-Minute vs 10-Minute Predictions**:
-- **5-Minute Prediction**: Closer to settlement — higher signal strength, more accurate
-- **10-Minute Prediction**: Further out — shows the trend direction
-- **Agreement**: If both timeframes agree on direction, it's a stronger signal
-- **Disagreement**: If they disagree, be cautious — momentum may be shifting
+**📊 5-Minute, 10-Minute, & 15-Minute Predictions**:
+- **5-Minute Prediction** (🔵 Blue): Closer to settlement — highest signal strength
+- **10-Minute Prediction** (🟡 Yellow): Middle of the period — shows if trend is holding
+- **15-Minute Prediction** (🔴 Red): Full trading period — initial signal at contract start
+
+**Agreement Status**:
+- ✅ **ALL AGREE**: All three timeframes agree → Strongest possible signal
+- ⚠️ **5 & 10 Agree**: Shorter-term alignment → Good signal, but 15-min may differ
+- ❌ **Disagree**: Timeframes conflict → Be cautious, momentum may be shifting
 
 **📈 Limit Analysis (Calculus-Inspired)**:
-- **Limit (Est. Accuracy)**: The model's projected accuracy at the exact moment of settlement
-- **Stability**: How steady the confidence is — stable = trustworthy, volatile = be careful
-
-**Decisions**:
-- 🟢 **BUY YES** → Model says price will go UP
-- 🔴 **BUY NO** → Model says price will go DOWN
-- ⏳ **SKIP** → No clear signal
+- **Limit (Est. Accuracy)**: The model's projected accuracy at settlement
+- **Stability**: How steady the confidence is — stable = trustworthy
 
 **When to Trade**:
 1. Wait for the 🟢 **Trading Window Open!** message
 2. Look for ⭐ **Best Bets**
-3. Check if **5 & 10 minute predictions agree** (✅)
-4. Check the **Limit Analysis** — is confidence stable?
+3. Check for **✅ ALL AGREE** (strongest signal)
+4. Check the **Limit Analysis** for stability
 5. Follow the signal (BUY YES or BUY NO)
 """)
 
@@ -1064,27 +1117,21 @@ with st.sidebar:
     
     st.markdown("### 📊 Timeframe Guide")
     st.markdown("""
-    **5-Minute Prediction** (🔵 Blue):
-    - Closer to settlement
-    - Higher signal strength
-    - More accurate
+    **15-Minute** (🔴 Red):
+    - Contract start
+    - Shows initial signal
     
-    **10-Minute Prediction** (🟡 Yellow):
-    - Shows the trend
-    - Earlier signal
-    - More time for price to move
+    **10-Minute** (🟡 Yellow):
+    - Middle of period
+    - Shows if trend is holding
     
-    **✅ Agree**: Both timeframes align → Strong signal
-    **⚠️ Disagree**: Timeframes conflict → Be cautious
-    """)
+    **5-Minute** (🔵 Blue):
+    - Before settlement
+    - Highest signal strength
     
-    st.divider()
-    
-    st.markdown("### 📈 Limit Analysis Guide")
-    st.markdown("""
-    **🟢 Stable**: Confidence is steady — trustworthy
-    **🟡 Moderate**: Some fluctuation — use caution
-    **🔴 Volatile**: Confidence is jumping — be careful
+    **✅ ALL AGREE** → Strongest signal
+    **⚠️ 5 & 10 Agree** → Good signal
+    **❌ Disagree** → Be cautious
     """)
     
     st.divider()
@@ -1093,4 +1140,4 @@ with st.sidebar:
     st.caption("Click refresh in your browser to update data")
 
 # --- Footer ---
-st.caption(f"⚡ Code 8 • 5-min & 10-min predictions • Limit Analysis • Last updated: {get_current_ct_time().strftime('%Y-%m-%d %H:%M:%S')} CT")
+st.caption(f"⚡ Code 9 • 5-min, 10-min, & 15-min predictions • Limit Analysis • Last updated: {get_current_ct_time().strftime('%Y-%m-%d %H:%M:%S')} CT")
