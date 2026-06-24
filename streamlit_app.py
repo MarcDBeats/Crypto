@@ -1,16 +1,14 @@
 # ============================================
-# CODE 6 LITE: ADVANCED KALSHI EDGE DETECTOR
-# Features: XGBoost + Random Forest Ensemble
-#           Technical Indicators | Macro Data | Lag Features
+# CODE 6: KALSHI EDGE DETECTOR (NO XGBOOST)
+# Features: Random Forest | Technical Indicators | Macro Data
 #           Order Book (10 Levels) | Depth Slope | Market Regime
-#           NO TENSORFLOW REQUIRED
 # ============================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -20,19 +18,11 @@ from sklearn.model_selection import train_test_split
 import warnings
 warnings.filterwarnings('ignore')
 
-# --- Try XGBoost, fallback to Random Forest ---
-try:
-    from xgboost import XGBClassifier
-    XGB_AVAILABLE = True
-except ImportError:
-    XGB_AVAILABLE = False
-
 # --- Page Config ---
 st.set_page_config(
     page_title="Kalshi Edge Detector Pro",
     page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 # --- Custom CSS ---
@@ -52,7 +42,7 @@ st.markdown("""
         border-radius: 0.5rem;
         border: 1px solid #3d3d5c;
         text-align: center;
-        min-height: 200px;
+        min-height: 180px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -68,7 +58,7 @@ st.markdown("""
         margin: 0.3rem 0;
     }
     .metric-card .edge-display {
-        font-size: 1.3rem;
+        font-size: 1.2rem;
         font-weight: 700;
         margin: 0.3rem 0;
     }
@@ -130,11 +120,6 @@ st.markdown("""
         border: 2px solid #fdcb6e;
         color: #fdcb6e;
     }
-    .regime-deep {
-        background: #667eea33;
-        border: 2px solid #667eea;
-        color: #667eea;
-    }
     .liquidity-high {
         color: #00b894;
         font-weight: 700;
@@ -146,10 +131,6 @@ st.markdown("""
     .liquidity-low {
         color: #ff6b6b;
         font-weight: 700;
-    }
-    .stDataFrame {
-        border-radius: 0.5rem;
-        overflow: hidden;
     }
     .spread-excellent {
         color: #00b894;
@@ -163,16 +144,12 @@ st.markdown("""
         color: #ff6b6b;
         font-weight: 700;
     }
-    .flat-class {
-        color: #fdcb6e;
-        font-weight: 600;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
 st.markdown('<div class="main-header">📊 Kalshi Edge Detector Pro</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Code 6 Lite • XGBoost/Random Forest Ensemble • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Code 6 • Random Forest • 20+ Indicators • Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- Settings ---
 BANKROLL = 100.00
@@ -277,25 +254,14 @@ def fetch_kalshi_order_book(ticker, depth=10):
         
         if spread < 0.02:
             spread_quality = "🟢 Excellent"
-            spread_class = "spread-excellent"
         elif spread < 0.05:
             spread_quality = "🟡 Good"
-            spread_class = "spread-good"
         else:
             spread_quality = "🔴 Poor"
-            spread_class = "spread-poor"
-        
-        yes_vol_5 = sum([float(p[1]) for p in yes_bids[:5]]) if yes_bids else 0
-        no_vol_5 = sum([float(p[1]) for p in no_bids[:5]]) if no_bids else 0
-        imbalance_5 = (yes_vol_5 - no_vol_5) / (yes_vol_5 + no_vol_5 + 1) if (yes_vol_5 + no_vol_5) > 0 else 0
         
         yes_vol_10 = sum([float(p[1]) for p in yes_bids[:10]]) if yes_bids else 0
         no_vol_10 = sum([float(p[1]) for p in no_bids[:10]]) if no_bids else 0
         imbalance_10 = (yes_vol_10 - no_vol_10) / (yes_vol_10 + no_vol_10 + 1) if (yes_vol_10 + no_vol_10) > 0 else 0
-        
-        bid_qty = yes_vol_10 if yes_vol_10 > 0 else 1
-        ask_qty = no_vol_10 if no_vol_10 > 0 else 1
-        microprice = (best_yes_bid * ask_qty + best_no_bid * bid_qty) / (bid_qty + ask_qty) if (bid_qty + ask_qty) > 0 else 0.50
         
         if len(yes_bids) >= 5:
             top_depth = float(yes_bids[0][1]) if yes_bids else 0
@@ -319,31 +285,21 @@ def fetch_kalshi_order_book(ticker, depth=10):
         
         if liquidity_score >= 0.7:
             liquidity_label = "🟢 High"
-            liquidity_class = "liquidity-high"
         elif liquidity_score >= 0.4:
             liquidity_label = "🟡 Medium"
-            liquidity_class = "liquidity-medium"
         else:
             liquidity_label = "🔴 Low"
-            liquidity_class = "liquidity-low"
-        
-        depth = len(yes_bids) + len(no_bids)
         
         return {
             'best_yes_bid': best_yes_bid,
             'best_no_bid': best_no_bid,
             'spread': spread,
             'spread_quality': spread_quality,
-            'spread_class': spread_class,
-            'imbalance_5': imbalance_5,
             'imbalance_10': imbalance_10,
-            'microprice': microprice,
             'depth_slope': depth_slope,
             'depth_slope_label': depth_slope_label,
             'liquidity_score': liquidity_score,
             'liquidity_label': liquidity_label,
-            'liquidity_class': liquidity_class,
-            'depth': depth,
             'yes_volume': yes_vol_10,
             'no_volume': no_vol_10
         }
@@ -353,16 +309,11 @@ def fetch_kalshi_order_book(ticker, depth=10):
             'best_no_bid': 0,
             'spread': 0,
             'spread_quality': '🔴 Poor',
-            'spread_class': 'spread-poor',
-            'imbalance_5': 0,
             'imbalance_10': 0,
-            'microprice': 0.50,
             'depth_slope': 1,
             'depth_slope_label': '🟡 Balanced',
             'liquidity_score': 0,
             'liquidity_label': '🔴 Low',
-            'liquidity_class': 'liquidity-low',
-            'depth': 0,
             'yes_volume': 0,
             'no_volume': 0
         }
@@ -382,64 +333,68 @@ def fetch_fear_greed_index():
     except:
         return {'value': 50, 'classification': 'Neutral'}
 
-# --- Advanced Feature Engineering ---
+# --- Feature Engineering ---
 def add_advanced_features(df):
-    """Add comprehensive technical indicators, lag features, and volatility"""
+    """Add comprehensive technical indicators"""
     
+    # Log returns
     df['log_return'] = np.log(df['close'] / df['close'].shift(1))
-    df['log_return_5'] = np.log(df['close'] / df['close'].shift(5))
-    df['log_return_10'] = np.log(df['close'] / df['close'].shift(10))
-    
     df['abs_log_return'] = df['log_return'].abs()
-    df['abs_log_return_5'] = df['log_return_5'].abs()
-    df['abs_log_return_10'] = df['log_return_10'].abs()
     
+    # Lag features
     df['lag_1'] = df['close'].shift(1)
     df['lag_5'] = df['close'].shift(5)
-    df['lag_10'] = df['close'].shift(10)
-    df['lag_volume'] = df['volume'].shift(1)
     
+    # Volatility
     df['volatility_5'] = df['return_1'].rolling(5).std()
     df['volatility_10'] = df['return_1'].rolling(10).std()
     df['volatility_ratio'] = df['volatility_5'] / (df['volatility_10'] + 0.001)
     
+    # Moving averages
     df['sma_5'] = df['close'].rolling(5).mean()
     df['sma_10'] = df['close'].rolling(10).mean()
     df['sma_20'] = df['close'].rolling(20).mean()
-    df['sma_50'] = df['close'].rolling(50).mean()
     df['ema_9'] = df['close'].ewm(span=9).mean()
     df['ema_21'] = df['close'].ewm(span=21).mean()
     
+    # RSI
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
     
+    # MACD
     df['macd'] = df['close'].ewm(span=12).mean() - df['close'].ewm(span=26).mean()
     df['macd_signal'] = df['macd'].ewm(span=9).mean()
     df['macd_hist'] = df['macd'] - df['macd_signal']
     
+    # Bollinger Bands
     df['bb_middle'] = df['close'].rolling(20).mean()
     bb_std = df['close'].rolling(20).std()
     df['bb_upper'] = df['bb_middle'] + 2 * bb_std
     df['bb_lower'] = df['bb_middle'] - 2 * bb_std
     df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
     
+    # ATR
     df['atr'] = (df['high'] - df['low']).rolling(14).mean()
     
+    # Stochastic
     low_min = df['low'].rolling(14).min()
     high_max = df['high'].rolling(14).max()
     df['stoch_k'] = 100 * ((df['close'] - low_min) / (high_max - low_min + 0.001))
     df['stoch_d'] = df['stoch_k'].rolling(3).mean()
     
+    # Williams %R
     df['williams_r'] = -100 * ((high_max - df['close']) / (high_max - low_min + 0.001))
     
+    # CCI
     tp = (df['high'] + df['low'] + df['close']) / 3
     sma_tp = tp.rolling(20).mean()
     mad_tp = tp.rolling(20).apply(lambda x: np.mean(np.abs(x - np.mean(x))))
     df['cci'] = (tp - sma_tp) / (0.015 * mad_tp + 0.001)
     
+    # MFI
     typical_price = (df['high'] + df['low'] + df['close']) / 3
     money_flow = typical_price * df['volume']
     positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0).rolling(14).sum()
@@ -447,6 +402,7 @@ def add_advanced_features(df):
     mfi_ratio = positive_flow / (negative_flow + 0.001)
     df['mfi'] = 100 - (100 / (1 + mfi_ratio))
     
+    # ADX
     tr = np.maximum(df['high'] - df['low'], 
                     np.maximum(abs(df['high'] - df['close'].shift(1)), 
                               abs(df['low'] - df['close'].shift(1))))
@@ -464,40 +420,11 @@ def add_advanced_features(df):
     dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 0.001)
     df['adx'] = dx.rolling(14).mean()
     
+    # Price features
     df['price_range'] = (df['high'] - df['low']) / df['close']
-    df['high_low_ratio'] = df['high'] / df['low']
-    df['close_open_ratio'] = df['close'] / df['open']
     df['volume_ratio'] = df['volume'] / df['volume'].rolling(10).mean()
     
     return df
-
-# --- Ensemble Model (XGBoost + Random Forest) ---
-def get_ensemble_prediction(X_train, y_train, X_test):
-    """Generate ensemble prediction using XGBoost and Random Forest"""
-    
-    predictions = []
-    
-    # Model 1: XGBoost (if available)
-    if XGB_AVAILABLE:
-        try:
-            xgb = XGBClassifier(n_estimators=50, max_depth=3, learning_rate=0.1, random_state=42)
-            xgb.fit(X_train, y_train)
-            pred_xgb = xgb.predict_proba(X_test)[0][1]
-            predictions.append(pred_xgb)
-        except:
-            pass
-    
-    # Model 2: Random Forest (always available)
-    rf = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
-    rf.fit(X_train, y_train)
-    pred_rf = rf.predict_proba(X_test)[0][1]
-    predictions.append(pred_rf)
-    
-    # Ensemble: average predictions
-    if predictions:
-        return np.mean(predictions)
-    else:
-        return 0.50
 
 # --- MAIN LOOP ---
 all_results = []
@@ -522,7 +449,7 @@ progress_bar = st.progress(0)
 status_text = st.empty()
 
 for idx, coin in enumerate(COINS):
-    status_text.text(f"🔄 Analyzing {coin} with advanced features...")
+    status_text.text(f"🔄 Analyzing {coin}...")
     
     try:
         df = fetch_yahoo_data(coin)
@@ -559,18 +486,19 @@ for idx, coin in enumerate(COINS):
         if len(X_df_clean) < 50:
             continue
         
-        # Split data
+        # Train model
         X_train = X_df_clean[available_cols].values[:-1]
         y_train = X_df_clean['target'].values[:-1]
         X_test = X_df_clean[available_cols].values[-1:].reshape(1, -1)
         
-        # Scale
         scaler = RobustScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
         
-        # Get ensemble prediction
-        prob_5m = get_ensemble_prediction(X_train_scaled, y_train, X_test_scaled)
+        model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
+        model.fit(X_train_scaled, y_train)
+        
+        prob_5m = model.predict_proba(X_test_scaled)[0][1]
         prob_15m = prob_5m * 0.95 + 0.025
         
         market_price = kalshi_prices.get(coin, 0.50)
@@ -581,7 +509,6 @@ for idx, coin in enumerate(COINS):
         liquidity_score = order_book.get('liquidity_score', 0)
         liquidity_label = order_book.get('liquidity_label', '🔴 Low')
         imbalance_10 = order_book.get('imbalance_10', 0)
-        microprice = order_book.get('microprice', 0.50)
         depth_slope = order_book.get('depth_slope', 1)
         depth_slope_label = order_book.get('depth_slope_label', '🟡 Balanced')
         
@@ -669,8 +596,6 @@ for idx, coin in enumerate(COINS):
             'Spread_Quality': spread_quality,
             'Imbalance_10': imbalance_10,
             'Imbalance_10_Str': f"{imbalance_10:.2f}",
-            'Microprice': microprice,
-            'Microprice_Str': f"{microprice:.3f}",
             'Depth_Slope': depth_slope,
             'Depth_Slope_Str': f"{depth_slope:.2f}",
             'Depth_Slope_Label': depth_slope_label,
@@ -820,7 +745,6 @@ if all_results:
         'Spread': r['Spread_Str'],
         'Spread Quality': r['Spread_Quality'],
         'Imbalance': r['Imbalance_10_Str'],
-        'Microprice': r['Microprice_Str'],
         'Depth Slope': r['Depth_Slope_Str'],
         'Depth Slope Label': r['Depth_Slope_Label'],
         'Liquidity': r['Liquidity'],
@@ -836,7 +760,7 @@ if all_results:
     
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 else:
-    st.warning("No predictions available. Please check data sources.")
+    st.warning("No predictions available.")
 
 st.divider()
 
@@ -914,11 +838,10 @@ with st.sidebar:
     
     st.divider()
     
-    st.markdown("### 🆕 Code 6 Lite Features")
+    st.markdown("### 🆕 Code 6 Features")
     st.markdown("""
-    ✅ **XGBoost + Random Forest Ensemble**  
     ✅ **20+ Technical Indicators** (ADX, Stochastic, CCI, MFI, Williams %R)  
-    ✅ **Lag Features** (lag_1, lag_5, lag_10)  
+    ✅ **Lag Features** (lag_1, lag_5)  
     ✅ **Volatility Features** (rolling std, volatility ratio)  
     ✅ **Macro Data** (SPY, VIX, DXY)  
     ✅ **RobustScaler** (outlier-resistant scaling)  
@@ -927,18 +850,9 @@ with st.sidebar:
     
     st.divider()
     
-    st.markdown("### 🎯 Model Status")
-    if XGB_AVAILABLE:
-        st.success("✅ XGBoost: Available")
-    else:
-        st.warning("⚠️ XGBoost: Not installed (using Random Forest only)")
-    st.success("✅ Random Forest: Available")
-    
-    st.divider()
-    
     st.markdown("### 🔄 Manual Refresh")
-    st.caption("Press 'R' or click the refresh button in your browser.")
+    st.caption("Press 'R' or click the refresh button.")
 
 # --- Footer ---
 st.divider()
-st.caption(f"⚡ Code 6 Lite • XGBoost/Random Forest Ensemble • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"⚡ Code 6 • Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
