@@ -1,9 +1,9 @@
 # ============================================
-# CODE 5.3: KALSHI EDGE DETECTOR WITH SETTLEMENT BACKTEST (FULLY FIXED)
-# Features: All previous features + Time zone fix + Kalshi schedule alignment
+# CODE 5.3: KALSHI EDGE DETECTOR WITH SETTLEMENT BACKTEST (FINAL FIX)
+# Features: All previous features + Extra decimal places for accuracy
 #           All times displayed in Central Time (CT)
 #           Settlement times exactly at :00, :15, :30, :45
-#           Shows ONLY the most recent settlement per coin
+#           Shows ONLY ONE settlement per coin (the most recent)
 # ============================================
 
 import streamlit as st
@@ -22,8 +22,7 @@ import json
 import os
 
 # --- TIME ZONE SETUP ---
-# Set your local time zone (Central Time)
-LOCAL_TZ = 'America/Chicago'  # Texas Central Time
+LOCAL_TZ = 'America/Chicago'
 
 try:
     import pytz
@@ -33,7 +32,6 @@ except ImportError:
     st.warning("pytz not installed. Using UTC times. Run: pip install pytz")
 
 def to_local_time(utc_dt):
-    """Convert UTC datetime to Central Time"""
     if not TZ_AVAILABLE:
         return utc_dt
     if utc_dt.tzinfo is None:
@@ -41,7 +39,6 @@ def to_local_time(utc_dt):
     return utc_dt.astimezone(pytz.timezone(LOCAL_TZ))
 
 def get_current_local_time():
-    """Get current Central Time"""
     if TZ_AVAILABLE:
         return datetime.now(pytz.timezone(LOCAL_TZ))
     else:
@@ -246,10 +243,6 @@ st.markdown("""
         font-size: 1.1rem;
         font-weight: 700;
     }
-    .local-time {
-        color: #fdcb6e;
-        font-weight: 600;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -285,10 +278,39 @@ COIN_METADATA = {
     'DOGE-USD': {'name': 'Dogecoin', 'symbol': 'DOGE', 'color': '#c2a633'}
 }
 
+# --- FORMATTING HELPERS (EXTRA DECIMAL PLACES) ---
+def fmt_price(val):
+    """Format price with 4 decimal places for accuracy"""
+    if val is None or pd.isna(val):
+        return '—'
+    return f"${val:,.4f}"
+
+def fmt_kalshi(val):
+    """Format Kalshi price with 4 decimal places"""
+    if val is None or pd.isna(val):
+        return '—'
+    return f"{val:.4f}"
+
+def fmt_pnl(val):
+    """Format P&L with 4 decimal places"""
+    if val is None or pd.isna(val):
+        return '—'
+    return f"${val:,.4f}"
+
+def fmt_percent(val):
+    """Format percentage with 1 decimal place"""
+    if val is None or pd.isna(val):
+        return '—'
+    return f"{val:+.1f}%"
+
+def fmt_confidence(val):
+    """Format confidence as percentage"""
+    if val is None or pd.isna(val):
+        return '—'
+    return f"{val:.0%}"
+
 # --- SETTLEMENT TRACKER ---
 class SettlementTracker:
-    """Track previous settlements and compare model predictions"""
-    
     def __init__(self, filename='settlement_data.json'):
         self.filename = filename
         self.data = self._load_data()
@@ -309,7 +331,9 @@ class SettlementTracker:
     def add_settlement(self, coin, settlement_time, predicted_direction, 
                        predicted_price, actual_price, confidence, edge,
                        win, pnl):
-        """Record a settlement comparison"""
+        # Remove any existing entry for this coin
+        self.data['history'] = [h for h in self.data['history'] if h['coin'] != coin]
+        
         entry = {
             'timestamp': datetime.now().isoformat(),
             'settlement_time': settlement_time.isoformat(),
@@ -364,13 +388,6 @@ class SettlementTracker:
             'avg_pnl': total_pnl / len(history) if history else 0,
             'coin_stats': coin_stats
         }
-    
-    def get_last_settlement(self, coin):
-        history = self.data['history']
-        for h in reversed(history):
-            if h['coin'] == coin:
-                return h
-        return None
     
     def get_stats(self):
         return self.data['stats']
@@ -618,7 +635,6 @@ def add_advanced_features(df):
 
 # --- GET NEXT KALSHI SETTLEMENT TIME ---
 def get_next_kalshi_settlement(current_time):
-    """Get the next Kalshi settlement time (:00, :15, :30, :45)"""
     minute = current_time.minute
     minutes_to_next = (15 - (minute % 15)) % 15
     if minutes_to_next == 0:
@@ -631,7 +647,6 @@ def get_next_kalshi_settlement(current_time):
 
 # --- GET PREVIOUS KALSHI SETTLEMENT ---
 def get_previous_kalshi_settlement(current_time):
-    """Get the previous Kalshi settlement time (:00, :15, :30, :45)"""
     minute = current_time.minute
     minutes_since = minute % 15
     if minutes_since == 0:
@@ -644,7 +659,6 @@ def get_previous_kalshi_settlement(current_time):
 
 # --- GET CONTRACT TARGET WITH KALSHI ALIGNMENT ---
 def get_next_contract_target(df_clean, coin_symbol):
-    """Get the model's price target for the next Kalshi contract"""
     try:
         current_price = df_clean['close'].iloc[-1]
         
@@ -732,7 +746,7 @@ def get_next_contract_target(df_clean, coin_symbol):
 # --- MAIN LOOP ---
 all_results = []
 best_bets = []
-settlement_results = []  # This will hold the current display data
+settlement_results = []
 
 fear_greed = fetch_fear_greed_index()
 macro_data = fetch_macro_data()
@@ -1001,46 +1015,47 @@ for idx, coin in enumerate(COINS):
                                         'Coin': metadata['name'],
                                         'Symbol': metadata['symbol'],
                                         'Predicted': prev_direction,
-                                        'Predicted Price': f"${prev_predicted_price:.2f}",
-                                        'Actual Price': f"${settlement_price:.2f}",
+                                        'Predicted Price': fmt_price(prev_predicted_price),
+                                        'Actual Price': fmt_price(settlement_price),
                                         'Result': '✅ WIN' if win else '❌ LOSS',
-                                        'P&L': f"${pnl:.2f}",
-                                        'Confidence': f"{prev_prob:.0%}",
+                                        'P&L': fmt_pnl(pnl),
+                                        'Confidence': fmt_confidence(prev_prob),
                                         'Time': time_str
                                     })
                         except:
                             pass
         
+        # --- Format result with extra decimal places ---
         result = {
             'Name': metadata['name'],
             'Symbol': metadata['symbol'],
             'Price': current_price,
-            'Price_Str': f"${current_price:.2f}",
+            'Price_Str': fmt_price(current_price),
             'Market_Price': market_price,
-            'Market_Price_Str': f"{market_price:.3f}",
+            'Market_Price_Str': fmt_kalshi(market_price),
             'Spread': spread,
-            'Spread_Str': f"{spread:.3f}",
+            'Spread_Str': f"{spread:.4f}",
             'Spread_Quality': spread_quality,
             'Imbalance_10': imbalance_10,
-            'Imbalance_10_Str': f"{imbalance_10:.2f}",
+            'Imbalance_10_Str': f"{imbalance_10:.3f}",
             'Depth_Slope': depth_slope,
-            'Depth_Slope_Str': f"{depth_slope:.2f}",
+            'Depth_Slope_Str': f"{depth_slope:.3f}",
             'Depth_Slope_Label': depth_slope_label,
             'Liquidity': liquidity_label,
             'Liquidity_Score': liquidity_score,
             'Regime': regime,
             'Regime_Class': regime_class,
             'Prob_5m': prob_5m,
-            'Prob_5m_Str': f"{prob_5m:.0%}" if prob_5m else '—',
+            'Prob_5m_Str': fmt_confidence(prob_5m) if prob_5m else '—',
             'Edge_5m': edge_5m,
-            'Edge_5m_Str': f"{edge_5m:.0%}" if prob_5m else '—',
+            'Edge_5m_Str': f"{edge_5m:.1%}" if prob_5m else '—',
             'Decision_5m': decision_5m,
             'Direction_5m': direction_5m,
             'Is_Signal_5m': is_signal_5m,
             'Prob_15m': prob_15m,
-            'Prob_15m_Str': f"{prob_15m:.0%}" if prob_15m else '—',
+            'Prob_15m_Str': fmt_confidence(prob_15m) if prob_15m else '—',
             'Edge_15m': edge_15m,
-            'Edge_15m_Str': f"{edge_15m:.0%}" if prob_15m else '—',
+            'Edge_15m_Str': f"{edge_15m:.1%}" if prob_15m else '—',
             'Decision_15m': decision_15m,
             'Direction_15m': direction_15m,
             'Is_Signal_15m': is_signal_15m,
@@ -1065,15 +1080,14 @@ progress_bar.empty()
 # 📊 DASHBOARD DISPLAY
 # ============================================
 
-# --- Previous Settlement Results Section (FIXED) ---
+# --- Previous Settlement Results Section ---
 st.markdown("### 📊 Previous Settlement Results")
 st.caption(f"What would have happened if you placed a $10 bet on the model's last prediction (All times in CT)")
 
 if settlement_results:
     df_settlement = pd.DataFrame(settlement_results)
     
-    # --- FIX: Only show the most recent settlement per coin ---
-    # Sort by time (most recent first) and drop duplicates
+    # Only show the most recent settlement per coin
     df_settlement = df_settlement.sort_values('Time', ascending=False)
     df_settlement = df_settlement.drop_duplicates(subset=['Coin', 'Symbol'], keep='first')
     
@@ -1105,7 +1119,6 @@ if settlement_results:
     
     st.dataframe(styled_settlement, use_container_width=True, hide_index=True)
     
-    # Overall stats from the tracker
     stats = settlement_tracker.get_stats()
     if stats:
         col1, col2, col3, col4 = st.columns(4)
@@ -1171,16 +1184,16 @@ for idx, coin in enumerate(COINS):
                 <div class="direction {dir_class}" style="font-size: 1.2rem;">
                     {dir_emoji} {target['direction']}
                 </div>
-                <div class="target-price">
-                    ${target['target_price']:.2f}
+                <div class="target-price" style="font-size: 1rem; font-weight: 600; color: #ccc;">
+                    {fmt_price(target['target_price'])}
                 </div>
                 <div style="font-size: 0.8rem; color: #888;">
                     Move: <span style="color: {'#00b894' if target['projected_move_pct'] > 0 else '#ff6b6b'};">
-                        {target['projected_move_pct']:+.1f}%
+                        {fmt_percent(target['projected_move_pct'])}
                     </span>
                 </div>
                 <div style="font-size: 0.8rem; color: #888;">
-                    Confidence: {target['win_prob']:.0%}
+                    Confidence: {fmt_confidence(target['win_prob'])}
                 </div>
                 <div class="confidence-bar">
                     <div class="confidence-fill" style="width: {conf_pct:.0f}%; background: {conf_color};"></div>
@@ -1244,13 +1257,13 @@ for i, result in enumerate(all_results):
             edge = result['Edge_5m']
             if edge >= MIN_EDGE:
                 edge_class = "edge-positive"
-                edge_display = f"🟢 +{edge:.0%}"
+                edge_display = f"🟢 +{edge:.1%}"
             elif edge <= -MIN_EDGE:
                 edge_class = "edge-negative"
-                edge_display = f"🔴 {edge:.0%}"
+                edge_display = f"🔴 {edge:.1%}"
             else:
                 edge_class = "edge-neutral"
-                edge_display = f"🟡 {edge:.0%}"
+                edge_display = f"🟡 {edge:.1%}"
             
             if result['Direction_5m'] == "FLAT":
                 dir_display = "⏸️ FLAT"
@@ -1268,11 +1281,13 @@ for i, result in enumerate(all_results):
             st.markdown(f"""
             <div class="metric-card">
                 <div class="coin-name">{result['Name']} ({result['Symbol']})</div>
-                <div class="coin-price">{result['Price_Str']}</div>
+                <div class="coin-price" style="font-size: 1.2rem; font-weight: 600; margin: 0.3rem 0;">
+                    {result['Price_Str']}
+                </div>
                 <div style="font-size: 0.8rem; color: #888;">
                     Kalshi: {result['Market_Price_Str']}
                 </div>
-                <div class="edge-display {edge_class}">
+                <div class="edge-display {edge_class}" style="font-size: 1.2rem; font-weight: 700; margin: 0.3rem 0;">
                     Edge: {edge_display}
                 </div>
                 <div style="display: flex; justify-content: center; gap: 0.5rem; margin-top: 0.3rem;">
@@ -1285,13 +1300,13 @@ for i, result in enumerate(all_results):
                         {'⬆️ YES' if result['Direction_15m'] == 'YES' else '⬇️ NO' if result['Direction_15m'] == 'NO' else '⏸️ FLAT' if result['Direction_15m'] == 'FLAT' else '⏳ WAIT'}
                     </span>
                 </div>
-                <div class="coin-stats">
+                <div class="coin-stats" style="font-size: 0.65rem; color: #888; margin-top: 0.2rem;">
                     Model 5m: {result['Prob_5m_Str']} | 15m: {result['Prob_15m_Str']}
                 </div>
-                <div class="coin-stats">
+                <div class="coin-stats" style="font-size: 0.65rem; color: #888; margin-top: 0.2rem;">
                     Liquidity: {result['Liquidity']} | Spread: {result['Spread_Quality']}
                 </div>
-                <div class="coin-stats">
+                <div class="coin-stats" style="font-size: 0.65rem; color: #888; margin-top: 0.2rem;">
                     Depth Slope: {result['Depth_Slope_Str']} ({result['Depth_Slope_Label']})
                 </div>
             </div>
@@ -1318,11 +1333,17 @@ if all_results:
         'Model 15m': r['Prob_15m_Str'],
         'Edge 15m': r['Edge_15m_Str'],
         'Decision 15m': r['Decision_15m'],
-        '5m Change': f"{r['Change_5m']:+.1f}%",
-        '15m Change': f"{r['Change_15m']:+.1f}%"
+        '5m Change': f"{r['Change_5m']:+.2f}%",
+        '15m Change': f"{r['Change_15m']:+.2f}%"
     } for r in all_results])
     
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
+    def color_price(val):
+        if isinstance(val, str) and val.startswith('$'):
+            return 'font-family: monospace;'
+        return ''
+    
+    styled_df = df_display.style.map(color_price)
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
 else:
     st.warning("No predictions available.")
 
@@ -1413,7 +1434,7 @@ with st.sidebar:
     ✅ **Per-Coin Performance** — See which coins your model predicts best  
     ✅ **Local Time Zone** — All times in Central Time (CT)  
     ✅ **Kalshi Schedule Alignment** — :00, :15, :30, :45 settlements  
-    ✅ **Only Most Recent Settlement Shown** — One result per coin  
+    ✅ **Extra Decimal Places** — 4 decimal places for prices  
     """)
     
     st.divider()
