@@ -1,9 +1,8 @@
 # ============================================
-# CODE 7: KALSHI PRICE PREDICTOR (FULL DATA, CLEAN DASHBOARD)
-# Behind the scenes: All Code 5 metrics (order book, depth slope, liquidity, etc.)
-# Dashboard: Clean view with price predictions, countdown, and best bets
-# Trading window: Only shows signals within 5 minutes of settlement
-# ALL TIMES IN CENTRAL TIME (TEXAS)
+# CODE 8: KALSHI PRICE PREDICTOR WITH 5 & 10 MINUTE PREDICTIONS
+# Features: Full data model + Limit Analysis
+#           Separate 5-minute and 10-minute predictions
+#           Compare confidence and direction across time horizons
 # ============================================
 
 import streamlit as st
@@ -18,31 +17,23 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.ensemble import RandomForestClassifier
 import warnings
 warnings.filterwarnings('ignore')
-
-# --- TIME ZONE SETUP (TEXAS / CENTRAL TIME) ---
 import pytz
 
-# Set your local time zone to Central Time (Texas)
+# --- TIME ZONE SETUP ---
 LOCAL_TZ = pytz.timezone('America/Chicago')
 
 def get_current_ct_time():
-    """Get current Central Time (Texas)"""
     return datetime.now(LOCAL_TZ)
 
 def get_next_kalshi_settlement():
-    """Get the next :00, :15, :30, :45 mark in Central Time"""
     now = get_current_ct_time()
     minute = now.minute
     seconds = now.second
-    
-    # Calculate minutes to next settlement
     minutes_to_next = (15 - (minute % 15)) % 15
     if minutes_to_next == 0 and seconds == 0:
         minutes_to_next = 15
-    
     next_settlement = now + timedelta(minutes=minutes_to_next)
     next_settlement = next_settlement.replace(second=0, microsecond=0)
-    
     return next_settlement, minutes_to_next
 
 # --- Page Config ---
@@ -70,7 +61,7 @@ st.markdown("""
         border-radius: 0.5rem;
         border: 1px solid #3d3d5c;
         text-align: center;
-        min-height: 150px;
+        min-height: 160px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -81,20 +72,20 @@ st.markdown("""
         color: #ccc;
     }
     .price-card .price {
-        font-size: 1.8rem;
+        font-size: 1.6rem;
         font-weight: 700;
-        margin: 0.3rem 0;
+        margin: 0.2rem 0;
         color: #fff;
     }
     .price-card .direction {
-        font-size: 1.2rem;
+        font-size: 1.1rem;
         font-weight: 600;
-        margin: 0.2rem 0;
+        margin: 0.1rem 0;
     }
     .price-card .confidence-bar {
-        height: 4px;
+        height: 3px;
         border-radius: 2px;
-        margin-top: 0.3rem;
+        margin-top: 0.2rem;
         background: #2d2d44;
     }
     .price-card .confidence-fill {
@@ -105,9 +96,9 @@ st.markdown("""
     .price-card .info-row {
         display: flex;
         justify-content: space-between;
-        font-size: 0.7rem;
+        font-size: 0.6rem;
         color: #888;
-        margin-top: 0.2rem;
+        margin-top: 0.1rem;
     }
     .direction-up {
         color: #00b894;
@@ -184,6 +175,29 @@ st.markdown("""
         font-size: 0.7rem;
         color: #888;
     }
+    .limit-box {
+        background: #0d0d1a;
+        padding: 0.3rem;
+        border-radius: 0.3rem;
+        border: 1px solid #2d2d44;
+        margin-top: 0.2rem;
+        font-size: 0.6rem;
+    }
+    .limit-box .label {
+        color: #888;
+    }
+    .limit-box .value {
+        font-weight: 600;
+    }
+    .limit-box .stable {
+        color: #00b894;
+    }
+    .limit-box .unstable {
+        color: #fdcb6e;
+    }
+    .limit-box .volatile {
+        color: #ff6b6b;
+    }
     .ct-badge {
         background: #fdcb6e33;
         color: #fdcb6e;
@@ -193,13 +207,36 @@ st.markdown("""
         font-weight: 600;
         display: inline-block;
     }
+    .timeframe-badge {
+        font-size: 0.6rem;
+        background: #2d2d44;
+        padding: 0.1rem 0.3rem;
+        border-radius: 0.2rem;
+        color: #888;
+        margin: 0.1rem;
+    }
+    .prediction-comparison {
+        display: flex;
+        gap: 0.3rem;
+        justify-content: center;
+        font-size: 0.6rem;
+        margin-top: 0.2rem;
+    }
+    .prediction-comparison .tf-5 {
+        color: #667eea;
+        font-weight: 600;
+    }
+    .prediction-comparison .tf-10 {
+        color: #fdcb6e;
+        font-weight: 600;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Header ---
 current_ct = get_current_ct_time()
 st.markdown('<div class="main-header">📊 Kalshi Price Predictor</div>', unsafe_allow_html=True)
-st.caption(f"⚡ Full data model • Clean dashboard • All times in CT • Updated: {current_ct.strftime('%Y-%m-%d %H:%M:%S')} CT")
+st.caption(f"⚡ 5-min & 10-min predictions • Limit Analysis • All times in CT • Updated: {current_ct.strftime('%Y-%m-%d %H:%M:%S')} CT")
 
 # --- Settings ---
 BANKROLL = 100.00
@@ -207,6 +244,7 @@ MAX_RISK_PER_TRADE = 0.02
 MIN_EDGE = 0.05
 FLAT_THRESHOLD = 0.002
 PREDICT_WINDOW = 5
+LOOKBACK_WINDOW = 30
 
 COINS = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD', 'DOGE-USD']
 
@@ -459,42 +497,37 @@ def add_advanced_features(df):
     
     return df
 
-# --- Get Prediction with Full Data ---
-def get_settlement_prediction(coin_symbol):
+# --- Get Prediction for Specific Time Horizon ---
+def get_prediction_for_horizon(coin_symbol, minutes_ahead, df_clean=None, feature_cols=None):
     try:
-        df = fetch_yahoo_data(coin_symbol)
-        if df.empty:
-            return None
-        
-        df = add_advanced_features(df)
-        df_clean = df.dropna()
+        if df_clean is None:
+            df = fetch_yahoo_data(coin_symbol)
+            if df.empty:
+                return None
+            df = add_advanced_features(df)
+            df_clean = df.dropna()
         
         if len(df_clean) < 60:
             return None
         
         current_price = df_clean['close'].iloc[-1]
         
-        # Get minutes to next settlement (in CT)
-        _, minutes_until = get_next_kalshi_settlement()
-        if minutes_until > PREDICT_WINDOW + 5:
-            minutes_until = 15
-        
-        # Features
-        feature_cols = [
-            'close', 'volume', 'log_return', 'abs_log_return',
-            'lag_1', 'lag_5', 'volatility_5', 'volatility_10',
-            'sma_5', 'sma_10', 'rsi', 'macd_hist',
-            'bb_position', 'atr', 'stoch_k', 'stoch_d',
-            'williams_r', 'cci', 'mfi', 'adx',
-            'price_range', 'volume_ratio'
-        ]
+        if feature_cols is None:
+            feature_cols = [
+                'close', 'volume', 'log_return', 'abs_log_return',
+                'lag_1', 'lag_5', 'volatility_5', 'volatility_10',
+                'sma_5', 'sma_10', 'rsi', 'macd_hist',
+                'bb_position', 'atr', 'stoch_k', 'stoch_d',
+                'williams_r', 'cci', 'mfi', 'adx',
+                'price_range', 'volume_ratio'
+            ]
         
         available_cols = [col for col in feature_cols if col in df_clean.columns]
         if len(available_cols) < 10:
             return None
         
         X = df_clean[available_cols].values
-        y = df_clean['close'].shift(-minutes_until) > df_clean['close']
+        y = df_clean['close'].shift(-minutes_ahead) > df_clean['close']
         
         X_df = pd.DataFrame(X, columns=available_cols)
         X_df['target'] = y.astype(int)
@@ -521,12 +554,159 @@ def get_settlement_prediction(coin_symbol):
         else:
             target_price = current_price * (1 - (0.5 - win_prob) * 0.02)
         
-        # --- FETCH ALL DATA (Hidden) ---
+        return {
+            'win_prob': win_prob,
+            'target_price': target_price
+        }
+        
+    except Exception as e:
+        return None
+
+# --- LIMIT ANALYSIS FUNCTION ---
+def limit_analysis(coin_symbol, df_clean, feature_cols, minutes_until):
+    try:
+        available_cols = [col for col in feature_cols if col in df_clean.columns]
+        if len(available_cols) < 10:
+            return None
+        
+        window_size = min(5, len(df_clean) - 1)
+        if window_size < 2:
+            return None
+        
+        confidences = []
+        timestamps = []
+        
+        for i in range(max(0, len(df_clean) - window_size - 1), len(df_clean) - 1):
+            train_data = df_clean.iloc[:i+1]
+            if len(train_data) < 30:
+                continue
+            
+            X = train_data[available_cols].values
+            y = train_data['close'].shift(-minutes_until) > train_data['close']
+            
+            X_df = pd.DataFrame(X, columns=available_cols)
+            X_df['target'] = y.astype(int)
+            X_df_clean = X_df.dropna()
+            
+            if len(X_df_clean) < 20:
+                continue
+            
+            X_train = X_df_clean[available_cols].values[:-1]
+            y_train = X_df_clean['target'].values[:-1]
+            
+            if len(X_train) < 10:
+                continue
+            
+            try:
+                model = RandomForestClassifier(n_estimators=20, max_depth=3, random_state=42)
+                model.fit(X_train, y_train)
+                
+                X_test = X_df_clean[available_cols].values[-1:].reshape(1, -1)
+                prob = model.predict_proba(X_test)[0][1]
+                
+                confidences.append(prob)
+                timestamps.append(train_data['time'].iloc[-1])
+            except:
+                continue
+        
+        if len(confidences) < 2:
+            return None
+        
+        time_diffs = []
+        conf_diffs = []
+        
+        for i in range(1, len(confidences)):
+            time_diff = (timestamps[i] - timestamps[i-1]).total_seconds() / 60
+            conf_diff = confidences[i] - confidences[i-1]
+            
+            if time_diff > 0:
+                time_diffs.append(time_diff)
+                conf_diffs.append(conf_diff)
+        
+        if not time_diffs:
+            return None
+        
+        avg_time_diff = np.mean(time_diffs)
+        avg_conf_diff = np.mean(conf_diffs)
+        rate_of_change = avg_conf_diff / avg_time_diff if avg_time_diff > 0 else 0
+        
+        conf_std = np.std(confidences) if len(confidences) > 1 else 0
+        stability = max(0, 1 - min(1, conf_std * 2))
+        
+        last_conf = confidences[-1]
+        
+        if abs(rate_of_change) > 0.001:
+            limit_estimate = last_conf + rate_of_change * minutes_until
+        else:
+            limit_estimate = last_conf
+        
+        limit_estimate = max(0.05, min(0.95, limit_estimate))
+        
+        if stability > 0.7 and abs(rate_of_change) < 0.01:
+            stability_label = "🟢 Stable"
+            stability_class = "stable"
+        elif stability > 0.4 and abs(rate_of_change) < 0.03:
+            stability_label = "🟡 Moderate"
+            stability_class = "unstable"
+        else:
+            stability_label = "🔴 Volatile"
+            stability_class = "volatile"
+        
+        return {
+            'confidence_history': confidences,
+            'timestamps': timestamps,
+            'rate_of_change': rate_of_change,
+            'stability': stability,
+            'stability_label': stability_label,
+            'stability_class': stability_class,
+            'limit_estimate': limit_estimate,
+            'last_confidence': last_conf,
+            'trend': '📈 Increasing' if rate_of_change > 0.005 else '📉 Decreasing' if rate_of_change < -0.005 else '➡️ Flat'
+        }
+        
+    except Exception as e:
+        return None
+
+# --- Get Full Prediction with All Timeframes ---
+def get_full_prediction(coin_symbol):
+    try:
+        df = fetch_yahoo_data(coin_symbol)
+        if df.empty:
+            return None
+        
+        df = add_advanced_features(df)
+        df_clean = df.dropna()
+        
+        if len(df_clean) < 60:
+            return None
+        
+        current_price = df_clean['close'].iloc[-1]
+        
+        # Get minutes to next settlement
+        _, minutes_until = get_next_kalshi_settlement()
+        if minutes_until > PREDICT_WINDOW + 5:
+            minutes_until = 15
+        
+        # Features
+        feature_cols = [
+            'close', 'volume', 'log_return', 'abs_log_return',
+            'lag_1', 'lag_5', 'volatility_5', 'volatility_10',
+            'sma_5', 'sma_10', 'rsi', 'macd_hist',
+            'bb_position', 'atr', 'stoch_k', 'stoch_d',
+            'williams_r', 'cci', 'mfi', 'adx',
+            'price_range', 'volume_ratio'
+        ]
+        
+        # --- PREDICTIONS FOR 5 AND 10 MINUTES ---
+        pred_5 = get_prediction_for_horizon(coin_symbol, 5, df_clean, feature_cols)
+        pred_10 = get_prediction_for_horizon(coin_symbol, 10, df_clean, feature_cols)
+        
+        # --- FETCH KALSHI DATA ---
         ticker = KALSHI_TICKERS.get(coin_symbol, '')
         kalshi_price = fetch_kalshi_price(ticker) if ticker else 0.50
         order_book = fetch_kalshi_order_book(ticker, depth=10) if ticker else {}
         
-        # Order book data (used for model but not displayed)
+        # Order book data
         spread = order_book.get('spread', 0)
         spread_quality = order_book.get('spread_quality', '🔴 Poor')
         liquidity_score = order_book.get('liquidity_score', 0)
@@ -535,38 +715,48 @@ def get_settlement_prediction(coin_symbol):
         depth_slope = order_book.get('depth_slope', 1)
         depth_slope_label = order_book.get('depth_slope_label', '🟡 Balanced')
         
-        # Fear & Greed (hidden)
+        # Fear & Greed
         fear_greed = fetch_fear_greed_index()
         
-        # Edge calculation
-        edge = win_prob - kalshi_price
+        # --- LIMIT ANALYSIS (using 5-minute horizon for limit) ---
+        limit_data = limit_analysis(coin_symbol, df_clean, feature_cols, 5)
         
-        # Adjust edge based on liquidity (hidden but affects decision)
-        if liquidity_score < 0.3:
-            edge *= 0.6
-        elif liquidity_score < 0.5:
-            edge *= 0.8
-        
-        if edge >= MIN_EDGE and win_prob > 0.55:
-            direction = "UP"
-            signal = "BUY YES"
-        elif edge <= -MIN_EDGE and win_prob < 0.45:
-            direction = "DOWN"
-            signal = "BUY NO"
+        # --- Determine primary signal based on 5-minute prediction ---
+        if pred_5:
+            win_prob = pred_5['win_prob']
+            edge = win_prob - kalshi_price
+            
+            if liquidity_score < 0.3:
+                edge *= 0.6
+            elif liquidity_score < 0.5:
+                edge *= 0.8
+            
+            if edge >= MIN_EDGE and win_prob > 0.55:
+                direction = "UP"
+                signal = "BUY YES"
+            elif edge <= -MIN_EDGE and win_prob < 0.45:
+                direction = "DOWN"
+                signal = "BUY NO"
+            else:
+                direction = "WAIT"
+                signal = "SKIP"
         else:
+            win_prob = 0.50
             direction = "WAIT"
             signal = "SKIP"
+            edge = 0
         
         return {
             'current_price': current_price,
-            'target_price': target_price,
+            'pred_5': pred_5,
+            'pred_10': pred_10,
             'win_prob': win_prob,
             'edge': edge,
             'direction': direction,
             'signal': signal,
             'minutes_until': minutes_until,
             'kalshi_price': kalshi_price,
-            # Hidden data (for reference, not displayed)
+            'limit_data': limit_data,
             '_spread': spread,
             '_spread_quality': spread_quality,
             '_liquidity_score': liquidity_score,
@@ -584,7 +774,7 @@ def get_settlement_prediction(coin_symbol):
 next_settlement, minutes_until = get_next_kalshi_settlement()
 is_active = minutes_until <= PREDICT_WINDOW
 
-# --- Countdown Timer (with CT badge) ---
+# --- Countdown Timer ---
 st.markdown(f"""
 <div class="countdown">
     <div class="label">⏰ Next Settlement <span class="ct-badge">CT</span></div>
@@ -599,10 +789,10 @@ st.markdown(f"""
 # --- Status Message ---
 if is_active:
     st.success(f"🟢 Trading window is OPEN! {minutes_until} minutes until settlement (CT).")
-    st.caption("You can place trades based on the predictions below.")
+    st.caption("Compare 5-minute and 10-minute predictions below.")
 else:
     st.warning(f"⏳ Trading window closed. Next window opens in {minutes_until - PREDICT_WINDOW} minutes (CT).")
-    st.caption("Predictions shown for reference only. Wait for the trading window to open.")
+    st.caption("Predictions shown for reference only. 5-min vs 10-min comparison available.")
 
 st.divider()
 
@@ -616,25 +806,40 @@ status_text = st.empty()
 for idx, coin in enumerate(COINS):
     status_text.text(f"🔄 Analyzing {coin}...")
     
-    pred = get_settlement_prediction(coin)
+    pred = get_full_prediction(coin)
     if pred:
         metadata = COIN_METADATA.get(coin, {'name': coin.replace('-USD', ''), 'symbol': coin.replace('-USD', ''), 'color': '#ffffff'})
+        
+        # Get predictions
+        win_prob_5 = pred['pred_5']['win_prob'] if pred['pred_5'] else 0.50
+        target_5 = pred['pred_5']['target_price'] if pred['pred_5'] else pred['current_price']
+        win_prob_10 = pred['pred_10']['win_prob'] if pred['pred_10'] else 0.50
+        target_10 = pred['pred_10']['target_price'] if pred['pred_10'] else pred['current_price']
+        
+        # Determine if 5 and 10 minute predictions agree
+        direction_5 = "UP" if win_prob_5 > 0.55 else "DOWN" if win_prob_5 < 0.45 else "WAIT"
+        direction_10 = "UP" if win_prob_10 > 0.55 else "DOWN" if win_prob_10 < 0.45 else "WAIT"
+        agree = direction_5 == direction_10 and direction_5 != "WAIT"
         
         result = {
             'Name': metadata['name'],
             'Symbol': metadata['symbol'],
             'Current_Price': pred['current_price'],
             'Current_Price_Str': fmt_price(pred['current_price']),
-            'Target_Price': pred['target_price'],
-            'Target_Price_Str': fmt_price(pred['target_price']),
-            'Win_Prob': pred['win_prob'],
-            'Win_Prob_Str': fmt_confidence(pred['win_prob']),
+            'Win_Prob_5': win_prob_5,
+            'Win_Prob_5_Str': fmt_confidence(win_prob_5),
+            'Target_5_Str': fmt_price(target_5),
+            'Win_Prob_10': win_prob_10,
+            'Win_Prob_10_Str': fmt_confidence(win_prob_10),
+            'Target_10_Str': fmt_price(target_10),
+            'Direction_5': direction_5,
+            'Direction_10': direction_10,
+            'Agree': agree,
+            'Signal': pred['signal'],
             'Edge': pred['edge'],
             'Edge_Str': f"{pred['edge']:.1%}",
-            'Direction': pred['direction'],
-            'Signal': pred['signal'],
-            'Kalshi_Price': pred['kalshi_price'],
             'Kalshi_Price_Str': f"{pred['kalshi_price']:.3f}",
+            'Limit_Data': pred['limit_data'],
             'Color': metadata['color']
         }
         all_results.append(result)
@@ -652,6 +857,7 @@ if all_results:
     signals_up = len([r for r in all_results if r['Signal'] == 'BUY YES'])
     signals_down = len([r for r in all_results if r['Signal'] == 'BUY NO'])
     signals_skip = len([r for r in all_results if r['Signal'] == 'SKIP'])
+    agree_count = len([r for r in all_results if r['Agree']])
     
     st.markdown(f"""
     <div class="summary-bar">
@@ -668,13 +874,15 @@ if all_results:
             <div class="label">SKIP</div>
         </div>
         <div class="summary-item">
-            <div class="number" style="color: #fdcb6e;">{len(all_results)}</div>
-            <div class="label">Total Coins</div>
+            <div class="number" style="color: #667eea;">{agree_count}</div>
+            <div class="label">✅ 5 & 10 Agree</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-# --- Display Price Predictions ---
+st.divider()
+
+# --- Display Price Predictions with 5 & 10 Minute Comparison ---
 st.markdown("### 📊 Price Predictions for Next Settlement")
 st.caption(f"Settlement at {next_settlement.strftime('%I:%M %p CT')} ({minutes_until}m remaining)")
 
@@ -682,35 +890,72 @@ cols = st.columns(len(COINS))
 
 for i, result in enumerate(all_results):
     with cols[i]:
-        if result['Direction'] == "UP":
+        # Use 5-minute direction for primary display
+        if result['Direction_5'] == "UP":
             dir_class = "direction-up"
             dir_emoji = "⬆️"
-        elif result['Direction'] == "DOWN":
+        elif result['Direction_5'] == "DOWN":
             dir_class = "direction-down"
             dir_emoji = "⬇️"
         else:
             dir_class = "direction-wait"
             dir_emoji = "⏳"
         
-        conf_pct = result['Win_Prob'] * 100
+        conf_pct = result['Win_Prob_5'] * 100
         conf_color = '#00b894' if conf_pct >= 65 else '#fdcb6e' if conf_pct >= 55 else '#ff6b6b'
+        
+        # Limit analysis display
+        limit_html = ""
+        if result['Limit_Data']:
+            limit = result['Limit_Data']
+            limit_est = limit['limit_estimate'] * 100
+            stability_label = limit['stability_label']
+            stability_class = limit['stability_class']
+            
+            limit_html = f"""
+            <div class="limit-box">
+                <div style="display: flex; justify-content: space-between;">
+                    <span class="label">📈 Limit (est. accuracy):</span>
+                    <span class="value" style="color: {conf_color};">{limit_est:.0f}%</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span class="label">🔄 Stability:</span>
+                    <span class="value {stability_class}">{stability_label}</span>
+                </div>
+            </div>
+            """
+        
+        # Agreement indicator
+        agree_emoji = "✅" if result['Agree'] else "⚠️"
+        agree_color = "#00b894" if result['Agree'] else "#fdcb6e"
         
         st.markdown(f"""
         <div class="price-card {'active-window' if is_active else 'inactive-window'}">
             <div class="coin-name">{result['Name']} ({result['Symbol']})</div>
-            <div class="price">{result['Target_Price_Str']}</div>
-            <div class="direction {dir_class}">{dir_emoji} {result['Direction']}</div>
+            
+            <div class="prediction-comparison">
+                <span class="tf-5">5m: {result['Win_Prob_5_Str']} → {result['Target_5_Str']}</span>
+                <span style="color:#888;">|</span>
+                <span class="tf-10">10m: {result['Win_Prob_10_Str']} → {result['Target_10_Str']}</span>
+            </div>
+            
+            <div class="direction {dir_class}">{dir_emoji} {result['Direction_5']}</div>
+            
             <div class="info-row">
                 <span>Current: {result['Current_Price_Str']}</span>
                 <span>Kalshi: {result['Kalshi_Price_Str']}</span>
             </div>
             <div class="info-row">
-                <span>Confidence: {result['Win_Prob_Str']}</span>
                 <span>Edge: {result['Edge_Str']}</span>
+                <span>{agree_emoji} <span style="color:{agree_color};">{'Agree' if result['Agree'] else 'Disagree'}</span></span>
             </div>
+            
             <div class="confidence-bar">
                 <div class="confidence-fill" style="width: {conf_pct:.0f}%; background: {conf_color};"></div>
             </div>
+            
+            {limit_html}
+            
             <div style="font-size: 0.8rem; font-weight: 600; margin-top: 0.3rem; color: {'#00b894' if result['Signal'] == 'BUY YES' else '#ff6b6b' if result['Signal'] == 'BUY NO' else '#636e72'};">
                 {result['Signal']}
             </div>
@@ -734,18 +979,28 @@ if is_active and best_bets:
                 card_class = "best-bet-no"
                 emoji = "🔴"
             
+            limit_est = ""
+            if bet['Limit_Data']:
+                limit_est = f"Est. Accuracy: {bet['Limit_Data']['limit_estimate']*100:.0f}%"
+            
+            agree_emoji = "✅" if bet['Agree'] else "⚠️"
+            
             st.markdown(f"""
             <div class="{card_class}">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span style="font-size: 1.2rem;">{bet['Name']} ({bet['Symbol']})</span>
-                    <span style="font-size: 1.5rem;">{emoji} {bet['Direction']}</span>
+                    <span style="font-size: 1.5rem;">{emoji} {bet['Direction_5']}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
-                    <span>Target: {bet['Target_Price_Str']}</span>
-                    <span>Edge: {bet['Edge_Str']}</span>
+                    <span>5m: {bet['Win_Prob_5_Str']}</span>
+                    <span>10m: {bet['Win_Prob_10_Str']}</span>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
-                    <span>Confidence: {bet['Win_Prob_Str']}</span>
+                    <span>Edge: {bet['Edge_Str']}</span>
+                    <span>{agree_emoji} {'Agree' if bet['Agree'] else 'Disagree'}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; opacity: 0.8;">
+                    <span>{limit_est}</span>
                     <span>Kalshi: {bet['Kalshi_Price_Str']}</span>
                 </div>
                 <div style="margin-top: 0.3rem; font-size: 0.8rem; font-weight: 600;">
@@ -771,12 +1026,15 @@ st.markdown("""
 
 **Trading Window**: Only trades are shown when you're within **5 minutes** of the next Kalshi settlement.
 
-**What's Happening Behind the Scenes**:
-- **Order Book Data**: Bid/ask spreads, depth slope, liquidity scores
-- **Technical Indicators**: RSI, MACD, Bollinger Bands, Stochastic, CCI, MFI, ADX
-- **Volatility & Momentum**: Returns, volatility ratios, price ranges
-- **Market Sentiment**: Fear & Greed Index
-- **All data feeds into the model** — you just see the clean results
+**📊 5-Minute vs 10-Minute Predictions**:
+- **5-Minute Prediction**: Closer to settlement — higher signal strength, more accurate
+- **10-Minute Prediction**: Further out — shows the trend direction
+- **Agreement**: If both timeframes agree on direction, it's a stronger signal
+- **Disagreement**: If they disagree, be cautious — momentum may be shifting
+
+**📈 Limit Analysis (Calculus-Inspired)**:
+- **Limit (Est. Accuracy)**: The model's projected accuracy at the exact moment of settlement
+- **Stability**: How steady the confidence is — stable = trustworthy, volatile = be careful
 
 **Decisions**:
 - 🟢 **BUY YES** → Model says price will go UP
@@ -786,8 +1044,9 @@ st.markdown("""
 **When to Trade**:
 1. Wait for the 🟢 **Trading Window Open!** message
 2. Look for ⭐ **Best Bets**
-3. Follow the signal (BUY YES or BUY NO)
-4. Place your trade on Kalshi
+3. Check if **5 & 10 minute predictions agree** (✅)
+4. Check the **Limit Analysis** — is confidence stable?
+5. Follow the signal (BUY YES or BUY NO)
 """)
 
 st.divider()
@@ -803,12 +1062,29 @@ with st.sidebar:
     
     st.divider()
     
-    st.markdown("### 🎯 Quick Guide")
+    st.markdown("### 📊 Timeframe Guide")
     st.markdown("""
-    1. **Check the timer** — wait for trading window
-    2. **Look at price targets** — model's prediction
-    3. **Check Best Bets** — highest confidence signals
-    4. **Place trade** — BUY YES or BUY NO on Kalshi
+    **5-Minute Prediction** (🔵 Blue):
+    - Closer to settlement
+    - Higher signal strength
+    - More accurate
+    
+    **10-Minute Prediction** (🟡 Yellow):
+    - Shows the trend
+    - Earlier signal
+    - More time for price to move
+    
+    **✅ Agree**: Both timeframes align → Strong signal
+    **⚠️ Disagree**: Timeframes conflict → Be cautious
+    """)
+    
+    st.divider()
+    
+    st.markdown("### 📈 Limit Analysis Guide")
+    st.markdown("""
+    **🟢 Stable**: Confidence is steady — trustworthy
+    **🟡 Moderate**: Some fluctuation — use caution
+    **🔴 Volatile**: Confidence is jumping — be careful
     """)
     
     st.divider()
@@ -817,4 +1093,4 @@ with st.sidebar:
     st.caption("Click refresh in your browser to update data")
 
 # --- Footer ---
-st.caption(f"⚡ Code 7 • Full data model • Clean dashboard • All times in CT • Last updated: {get_current_ct_time().strftime('%Y-%m-%d %H:%M:%S')} CT")
+st.caption(f"⚡ Code 8 • 5-min & 10-min predictions • Limit Analysis • Last updated: {get_current_ct_time().strftime('%Y-%m-%d %H:%M:%S')} CT")
